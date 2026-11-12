@@ -1,18 +1,62 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
-/**
- * Expose a safe API to the renderer via contextBridge.
- * All IPC calls are wrapped here so renderer never needs nodeIntegration.
- */
+function subscribe<T = unknown>(channel: string, cb: (payload: T) => void): () => void {
+  const listener = (_e: unknown, payload: T) => cb(payload);
+  ipcRenderer.on(channel, listener);
+  return () => ipcRenderer.removeListener(channel, listener);
+}
+
 contextBridge.exposeInMainWorld('electronAPI', {
-  // Window controls
+  // Window controls & Desktop Integration
   minimize: () => ipcRenderer.send('window:minimize'),
   maximize: () => ipcRenderer.send('window:maximize'),
   close: () => ipcRenderer.send('window:close'),
+  toggleMiniMode: () => ipcRenderer.invoke('window:toggleMiniMode'),
+  onMiniModeChanged: (cb: (isMini: boolean) => void) => subscribe<boolean>('window:miniModeChanged', cb),
+  onMediaShortcut: (cb: (action: 'playPause' | 'next' | 'prev') => void) =>
+    subscribe<'playPause' | 'next' | 'prev'>('shortcut:media', cb),
+  updateDiscordPresence: (trackInfo: unknown) =>
+    ipcRenderer.invoke('desktop:updatePresence', trackInfo),
 
-  // Player
+  desktop: {
+    updatePresence: (trackInfo: unknown) => ipcRenderer.invoke('desktop:updatePresence', trackInfo),
+    listenBrainzNowPlaying: (trackInfo: unknown) =>
+      ipcRenderer.invoke('desktop:listenBrainzNowPlaying', trackInfo),
+    listenBrainzScrobble: (trackInfo: unknown) =>
+      ipcRenderer.invoke('desktop:listenBrainzScrobble', trackInfo),
+    toggleLocalApi: (enabled: boolean) => ipcRenderer.invoke('desktop:toggleLocalApi', enabled),
+    extractPalette: (imageUrl: string) => ipcRenderer.invoke('desktop:extractPalette', imageUrl),
+  },
+
+  // Persistent Database, Stats & Settings
+  db: {
+    getInitialState: () => ipcRenderer.invoke('db:getInitialState'),
+    updateSettings: (partial: Record<string, unknown>) =>
+      ipcRenderer.invoke('db:updateSettings', partial),
+    saveQueueState: (queueState: unknown) => ipcRenderer.invoke('db:saveQueueState', queueState),
+    saveHistory: (history: unknown[]) => ipcRenderer.invoke('db:saveHistory', history),
+    saveLocalLibrary: (directories: string[], localTracks: unknown[]) =>
+      ipcRenderer.invoke('db:saveLocalLibrary', directories, localTracks),
+    toggleLike: (track: unknown) => ipcRenderer.invoke('db:toggleLike', track),
+    upsertLikedBatch: (tracks: unknown[], replaceAll?: boolean) =>
+      ipcRenderer.invoke('db:upsertLikedBatch', tracks, replaceAll),
+    savePlaylist: (playlist: unknown) => ipcRenderer.invoke('db:savePlaylist', playlist),
+    deletePlaylist: (playlistId: string) => ipcRenderer.invoke('db:deletePlaylist', playlistId),
+    toggleBlockArtist: (artistName: string) =>
+      ipcRenderer.invoke('db:toggleBlockArtist', artistName),
+    recordStats: (track: unknown, seconds?: number) =>
+      ipcRenderer.invoke('db:recordStats', track, seconds),
+    getStats: () => ipcRenderer.invoke('db:getStats'),
+    resetStats: () => ipcRenderer.invoke('db:resetStats'),
+    exportBackup: () => ipcRenderer.invoke('db:exportBackup'),
+    importBackup: () => ipcRenderer.invoke('db:importBackup'),
+  },
+
+  // Dual-Deck mpv Audio Player, Smart Automix, SponsorBlock & DSP
   player: {
     play: (url: string, meta: object) => ipcRenderer.invoke('player:play', url, meta),
+    prebufferNext: (nextData: object | null) =>
+      ipcRenderer.invoke('player:prebufferNext', nextData),
     pause: () => ipcRenderer.invoke('player:pause'),
     resume: () => ipcRenderer.invoke('player:resume'),
     stop: () => ipcRenderer.invoke('player:stop'),
@@ -20,60 +64,189 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setVolume: (vol: number) => ipcRenderer.invoke('player:setVolume', vol),
     setSpeed: (speed: number) => ipcRenderer.invoke('player:setSpeed', speed),
     setNormalization: (enabled: boolean) => ipcRenderer.invoke('player:setNormalization', enabled),
+    setDsp: (opts: object) => ipcRenderer.invoke('player:setDsp', opts),
+    setCrossfade: (seconds: number) => ipcRenderer.invoke('player:setCrossfade', seconds),
+    setSmartDjAutomix: (enabled: boolean) =>
+      ipcRenderer.invoke('player:setSmartDjAutomix', enabled),
+    setAutomixConfig: (opts: object) => ipcRenderer.invoke('player:setAutomixConfig', opts),
+    setEqualizer: (config: { enabled: boolean; bands: number[]; preset?: string }) =>
+      ipcRenderer.invoke('player:setEqualizer', config),
+    getAudioDevices: () => ipcRenderer.invoke('player:getAudioDevices'),
+    setAudioDevice: (device: string) => ipcRenderer.invoke('player:setAudioDevice', device),
+    setSleepTimer: (minutes: number | null, afterTrack = false) =>
+      ipcRenderer.invoke('player:setSleepTimer', minutes, afterTrack),
+    setAbLoop: (a: number | null, b: number | null) => ipcRenderer.invoke('player:setAbLoop', a, b),
+    auditQuality: (urlOrPath?: string) => ipcRenderer.invoke('player:auditQuality', urlOrPath),
     downloadTrack: (track: object) => ipcRenderer.invoke('player:downloadTrack', track),
     getStatus: () => ipcRenderer.invoke('player:getStatus'),
-    onProgress: (cb: (info: object) => void) => {
-      const handler = (_e: any, info: any) => cb(info);
-      ipcRenderer.on('player:progress', handler);
-      return () => ipcRenderer.removeListener('player:progress', handler);
-    },
+    onProgress: (cb: (info: any) => void) => subscribe('player:progress', cb),
     onEnded: (cb: () => void) => {
-      const handler = () => cb();
-      ipcRenderer.on('player:ended', handler);
-      return () => ipcRenderer.removeListener('player:ended', handler);
+      const listener = () => cb();
+      ipcRenderer.on('player:ended', listener);
+      return () => ipcRenderer.removeListener('player:ended', listener);
     },
+    onAutomixTransition: (cb: (info: { nextTrackId: string }) => void) =>
+      subscribe<{ nextTrackId: string }>('player:automixTransition', cb),
+    onAutomixPlan: (cb: (plan: any) => void) => subscribe('player:automixPlan', cb),
+    onSmartToast: (cb: (toast: { message: string; kind: string; timestamp: number }) => void) =>
+      subscribe('player:smartToast', cb),
+    onSleepTimerUpdate: (cb: (info: { remainingSec: number; afterTrack: boolean }) => void) =>
+      subscribe('player:sleepTimerUpdate', cb),
   },
 
-  // YouTube Music Live
+  // YouTube Music + Explore + Album / Artist / Playlist Details
   ytmusic: {
     search: (query: string) => ipcRenderer.invoke('ytmusic:search', query),
+    searchAll: (query: string) => ipcRenderer.invoke('ytmusic:searchAll', query),
+    getSuggestions: (query: string) => ipcRenderer.invoke('ytmusic:getSuggestions', query),
     getStreamUrl: (videoId: string) => ipcRenderer.invoke('ytmusic:getStreamUrl', videoId),
-    getHome: () => ipcRenderer.invoke('ytmusic:getHome'),
-    getCategory: (category: string, forceRefresh = false) =>
+    getHome: (chipParams?: string, forceRefresh?: boolean) =>
+      ipcRenderer.invoke('ytmusic:getHome', chipParams, forceRefresh),
+    getExplore: () => ipcRenderer.invoke('ytmusic:getExplore'),
+    getCategory: (category: string, forceRefresh?: boolean) =>
       ipcRenderer.invoke('ytmusic:getCategory', category, forceRefresh),
-    getArtist: (artistId: string) => ipcRenderer.invoke('ytmusic:getArtist', artistId),
     getAlbum: (albumId: string) => ipcRenderer.invoke('ytmusic:getAlbum', albumId),
+    getArtist: (artistId: string) => ipcRenderer.invoke('ytmusic:getArtist', artistId),
     getPlaylist: (playlistId: string) => ipcRenderer.invoke('ytmusic:getPlaylist', playlistId),
     getSuggested: (videoId: string) => ipcRenderer.invoke('ytmusic:getSuggested', videoId),
   },
 
-  // Spotify Integration (matching ArchiveTune SpotifyCore)
+  // Multi-Source Providers & Universal Fallback Matrix
+  providers: {
+    searchMulti: (query: string, source?: string) =>
+      ipcRenderer.invoke('providers:searchMulti', query, source),
+    resolveUniversal: (track: object, forceSource?: string) =>
+      ipcRenderer.invoke('providers:resolveUniversal', track, forceSource),
+    findAlternatives: (track: object) => ipcRenderer.invoke('providers:findAlternatives', track),
+    checkLatencies: () => ipcRenderer.invoke('providers:checkLatencies'),
+  },
+
+  // Shazam Music Recognition
+  recognition: {
+    recognizeLive: (mode: 'mic' | 'system' = 'system') =>
+      ipcRenderer.invoke('recognition:recognizeLive', mode),
+    pickAndRecognizeFile: () => ipcRenderer.invoke('recognition:pickAndRecognizeFile'),
+    recognizeFile: (filePath: string) => ipcRenderer.invoke('recognition:recognizeFile', filePath),
+    getHistory: () => ipcRenderer.invoke('recognition:getHistory'),
+    clearHistory: () => ipcRenderer.invoke('recognition:clearHistory'),
+    topGlobal: (limit = 25) => ipcRenderer.invoke('recognition:topGlobal', limit),
+    onStatus: (cb: (status: { phase: string; mode: string }) => void) =>
+      subscribe('recognition:status', cb),
+  },
+
+  // Listen Together (WebSocket Sync Room)
+  together: {
+    getState: () => ipcRenderer.invoke('together:getState'),
+    createRoom: (displayName: string, port?: number) =>
+      ipcRenderer.invoke('together:createRoom', displayName, port),
+    joinRoom: (url: string, displayName: string, code: string) =>
+      ipcRenderer.invoke('together:joinRoom', url, displayName, code),
+    leaveRoom: () => ipcRenderer.invoke('together:leaveRoom'),
+    syncHostState: (update: object) => ipcRenderer.invoke('together:syncHostState', update),
+    sendChat: (text: string, senderName?: string) =>
+      ipcRenderer.invoke('together:sendChat', text, senderName),
+    onState: (cb: (state: any) => void) => subscribe('together:state', cb),
+    onSyncPlayback: (cb: (payload: any) => void) => subscribe('together:syncPlayback', cb),
+  },
+
+  // Cross-Platform Playlist Import/Export
+  playlists: {
+    importFromUrl: (rawUrl: string, customName?: string) =>
+      ipcRenderer.invoke('playlists:importFromUrl', rawUrl, customName),
+    importFromFile: () => ipcRenderer.invoke('playlists:importFromFile'),
+    export: (playlistId: string, format: 'm3u8' | 'json') =>
+      ipcRenderer.invoke('playlists:export', playlistId, format),
+    onUpdated: (cb: (playlists: any[]) => void) => subscribe('playlists:updated', cb),
+  },
+
+  // Spotify
   spotify: {
     getStatus: () => ipcRenderer.invoke('spotify:getStatus'),
     login: () => ipcRenderer.invoke('spotify:login'),
     connectManual: (spDc: string) => ipcRenderer.invoke('spotify:connectManual', spDc),
     disconnect: () => ipcRenderer.invoke('spotify:disconnect'),
-    getLikedSongs: (limit?: number, offset?: number) => ipcRenderer.invoke('spotify:getLikedSongs', limit, offset),
+    getLikedSongs: (limit?: number, offset?: number) =>
+      ipcRenderer.invoke('spotify:getLikedSongs', limit, offset),
     getPlaylists: (limit?: number) => ipcRenderer.invoke('spotify:getPlaylists', limit),
-    getPlaylistTracks: (playlistId: string) => ipcRenderer.invoke('spotify:getPlaylistTracks', playlistId),
-    resolveTrack: (track: { title: string; artist: string }) => ipcRenderer.invoke('spotify:resolveTrack', track),
+    getPlaylistTracks: (playlistId: string) =>
+      ipcRenderer.invoke('spotify:getPlaylistTracks', playlistId),
+    getSavedAlbums: (limit?: number) => ipcRenderer.invoke('spotify:getSavedAlbums', limit),
+    getFollowedArtists: (limit?: number) =>
+      ipcRenderer.invoke('spotify:getFollowedArtists', limit),
+    getTopTracks: (limit?: number) => ipcRenderer.invoke('spotify:getTopTracks', limit),
+    toggleLike: (spotifyTrackId: string, like: boolean) =>
+      ipcRenderer.invoke('spotify:toggleLike', spotifyTrackId, like),
+    search: (query: string, limit?: number) =>
+      ipcRenderer.invoke('spotify:search', query, limit),
+    resolveTrack: (track: {
+      id?: string;
+      title: string;
+      artist: string;
+      album?: string;
+      duration?: number;
+    }) => ipcRenderer.invoke('spotify:resolveTrack', track),
   },
 
-  // Local Library
+  // YouTube & YouTube Music Account Sync
+  ytmAuth: {
+    getStatus: () => ipcRenderer.invoke('ytmAuth:getStatus'),
+    login: () => ipcRenderer.invoke('ytmAuth:login'),
+    connectManualCookie: (cookie: string) =>
+      ipcRenderer.invoke('ytmAuth:connectManualCookie', cookie),
+    switchAccount: (accountId: string) => ipcRenderer.invoke('ytmAuth:switchAccount', accountId),
+    toggleSync: (enabled: boolean) => ipcRenderer.invoke('ytmAuth:toggleSync', enabled),
+    logout: (accountId?: string) => ipcRenderer.invoke('ytmAuth:logout', accountId),
+    getLikedSongs: (mergeIntoLibrary = false) =>
+      ipcRenderer.invoke('ytmAuth:getLikedSongs', mergeIntoLibrary),
+    getLibraryPlaylists: () => ipcRenderer.invoke('ytmAuth:getLibraryPlaylists'),
+    getSubscriptions: () => ipcRenderer.invoke('ytmAuth:getSubscriptions'),
+    setLike: (videoId: string, like: boolean) =>
+      ipcRenderer.invoke('ytmAuth:setLike', videoId, like),
+  },
+
+  // SoundCloud OAuth & Library
+  soundcloud: {
+    getStatus: () => ipcRenderer.invoke('soundcloud:getStatus'),
+    login: () => ipcRenderer.invoke('soundcloud:login'),
+    connectManual: (token: string) => ipcRenderer.invoke('soundcloud:connectManual', token),
+    logout: () => ipcRenderer.invoke('soundcloud:logout'),
+    refreshClientId: () => ipcRenderer.invoke('soundcloud:refreshClientId'),
+    getLikedTracks: (limit?: number) => ipcRenderer.invoke('soundcloud:getLikedTracks', limit),
+    getPlaylists: (limit?: number) => ipcRenderer.invoke('soundcloud:getPlaylists', limit),
+    getFollowingFeed: (limit?: number) => ipcRenderer.invoke('soundcloud:getFollowingFeed', limit),
+    getGenreCharts: (genre?: string, limit?: number) =>
+      ipcRenderer.invoke('soundcloud:getGenreCharts', genre, limit),
+    toggleLike: (scTrackId: string, like: boolean) =>
+      ipcRenderer.invoke('soundcloud:toggleLike', scTrackId, like),
+  },
+
+  // Local Tag & Cover Editor
+  tagEditor: {
+    read: (filePath: string) => ipcRenderer.invoke('tagEditor:read', filePath),
+    pickCover: () => ipcRenderer.invoke('tagEditor:pickCover'),
+    write: (filePath: string, tags: object) => ipcRenderer.invoke('tagEditor:write', filePath, tags),
+  },
+
+  // Local library
   library: {
-    scan: (dirPath: string) => ipcRenderer.invoke('library:scan', dirPath),
+    scan: (dir: string) => ipcRenderer.invoke('library:scan', dir),
     addDirectory: () => ipcRenderer.invoke('dialog:openDirectory'),
     addFiles: () => ipcRenderer.invoke('dialog:openFiles'),
     getMetadata: (filePath: string) => ipcRenderer.invoke('library:getMetadata', filePath),
   },
 
-  // Lyrics
+  // Multi-Provider Lyrics & Motion Canvas
   lyrics: {
-    get: (title: string, artist: string, duration: number) =>
-      ipcRenderer.invoke('lyrics:get', title, artist, duration),
+    get: (title: string, artist: string, duration: number, videoId?: string) =>
+      ipcRenderer.invoke('lyrics:get', title, artist, duration, videoId),
+    searchCandidates: (query: string) => ipcRenderer.invoke('lyrics:searchCandidates', query),
+  },
+  canvas: {
+    get: (track: { id: string; title: string; artist: string }) =>
+      ipcRenderer.invoke('canvas:get', track),
   },
 
-  // Scrobbling
+  // Last.fm Scrobbling
   scrobble: {
     configure: (apiKey: string, apiSecret: string, sessionKey: string) =>
       ipcRenderer.invoke('scrobble:configure', apiKey, apiSecret, sessionKey),
@@ -81,6 +254,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
     scrobble: (track: object) => ipcRenderer.invoke('scrobble:scrobble', track),
   },
 
-  // Shell
   openExternal: (url: string) => ipcRenderer.send('shell:openExternal', url),
 });

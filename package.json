@@ -1,7 +1,7 @@
 {
-  "name": "archivetune-linux",
-  "version": "1.0.0",
-  "description": "ArchiveTune for Linux — YouTube Music & Local Files Desktop Player",
+  "name": "archivetune-desktop",
+  "version": "16.2.0-beta.1",
+  "description": "ArchiveTune Desktop (V16 Beta) — Dual-Deck Smart DJ Automix, Universal Lossless Matrix, Word-by-Word Lyrics & Motion Canvas",
   "private": true,
   "author": {
     "name": "hari45wavin",
@@ -23,11 +23,17 @@
   },
   "dependencies": {
     "@tanstack/react-query": "^5.62.0",
+    "@types/ws": "^8.18.2",
     "framer-motion": "^11.12.0",
     "lucide-react": "^0.468.0",
+    "mpris-service": "^2.1.2",
+    "music-metadata": "^12.4.0",
+    "node-shazam": "^1.2.7",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.28.0",
+    "ws": "^8.22.2",
+    "youtubei.js": "^18.3.0",
     "zustand": "^5.0.2"
   },
   "devDependencies": {
@@ -49,14 +55,20 @@
     "appId": "com.rukamori.archivetune.linux",
     "productName": "ArchiveTune",
     "linux": {
-      "target": ["AppImage", "dir"],
+      "target": [
+        "AppImage",
+        "dir"
+      ],
       "category": "Audio",
       "icon": "assets/icon.png",
       "synopsis": "YouTube Music & Local Files Player",
       "description": "ArchiveTune for Linux — the cutest music player with YouTube Music streaming, local library, synced lyrics, crossfade, and Last.fm scrobbling."
     },
     "win": {
-      "target": ["nsis", "portable"],
+      "target": [
+        "nsis",
+        "portable"
+      ],
       "icon": "assets/icon.png"
     },
     "directories": {

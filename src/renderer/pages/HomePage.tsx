@@ -1,140 +1,549 @@
 import React, { useState, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Flame, Globe2, Music, Sparkles, Coffee, Radio, Play, RefreshCw, History, Heart, Disc3 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import {
+  Flame,
+  Sparkles,
+  Play,
+  RefreshCw,
+  History,
+  Disc3,
+  Compass,
+  AudioLines,
+  PlugZap,
+  Users,
+  Heart,
+  ListMusic,
+  Shuffle,
+} from 'lucide-react';
 import TrackRow from '../components/TrackRow';
-import { Track } from '../store';
+import { Track, usePlayerStore, useAccountsStore } from '../store';
 import { usePlayer } from '../lib/usePlayer';
-import { usePlayerStore } from '../store';
 
-const CATEGORIES = [
-  { id: 'trending', label: 'Trending Now', icon: Flame },
-  { id: 'mixes', label: 'Top Mixes', icon: Radio },
-  { id: 'hindi', label: 'Bollywood & Chill', icon: Music },
-  { id: 'global_top', label: 'Global Top 50', icon: Globe2 },
-  { id: 'pop', label: 'Pop Hits', icon: Sparkles },
-  { id: 'lofi', label: 'Chill Lo-Fi', icon: Coffee },
-  { id: 'romantic', label: 'Love & Romance', icon: Heart },
-  { id: 'hiphop', label: 'Hip-Hop / Rap', icon: Disc3 },
-];
+const AI_SLOP_REGEX = /\b(ai generated|suno ai|udio ai|10 hours)\b/i;
+
+interface HomeChip {
+  title: string;
+  params: string;
+}
+
+interface HomeMixPage {
+  id: string;
+  title: string;
+  subtitle: string;
+  source: 'youtube' | 'spotify';
+  tracks: Track[];
+}
+
+interface YtmShelfItem {
+  id: string;
+  title: string;
+  subtitle: string;
+  thumbnail: string;
+  type: 'song' | 'playlist' | 'album' | 'artist';
+  duration?: number;
+  source: 'youtube';
+}
+
+interface YtmShelf {
+  title: string;
+  items: YtmShelfItem[];
+}
 
 export default function HomePage() {
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [selectedCategory, setSelectedCategory] = useState('trending');
+  const [selectedChip, setSelectedChip] = useState<HomeChip | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const { playTrack } = usePlayer();
-  const { setQueue, history } = usePlayerStore();
+  const [loadingShelfItem, setLoadingShelfItem] = useState<string | null>(null);
+
+  const { playTrack, startRadio } = usePlayer();
+  const { setQueue, history, likedSongs, playlists, blockedArtists, aiContentFilter } = usePlayerStore();
+  const { spotifyConnected, ytmConnected, scConnected } = useAccountsStore();
 
   const greeting = useMemo(() => {
     const hour = new Date().getHours();
-    if (hour < 12) return 'Good morning';
-    if (hour < 17) return 'Good afternoon';
-    return 'Good evening';
+    if (hour < 6) return 'Доброй ночи';
+    if (hour < 12) return 'Доброе утро';
+    if (hour < 17) return 'Добрый день';
+    return 'Добрый вечер';
   }, []);
 
-  const { data: tracks = [], isLoading, isFetching } = useQuery<Track[]>({
-    queryKey: ['liveCategory', selectedCategory],
+  const { data: homeData, isLoading, isFetching } = useQuery<any>({
+    queryKey: ['personalizedHome', selectedChip?.params || 'default', likedSongs.length, playlists.length],
     queryFn: async () => {
-      const res = await window.electronAPI?.ytmusic.getCategory(selectedCategory, false);
-      return (res || []).map((t: any) => ({
-        ...t,
-        source: 'youtube' as const,
-      }));
+      const res = await window.electronAPI?.ytmusic?.getHome(selectedChip?.params, false);
+      return res || {};
     },
-    staleTime: 5 * 60 * 1000,
+    staleTime: 2 * 60 * 1000,
   });
+
+  const filterTracks = (list: Track[] = []): Track[] => {
+    return list.filter((t) => {
+      if (!t || !t.title) return false;
+      if (blockedArtists.some((b) => t.artist?.toLowerCase().includes(b.toLowerCase()))) return false;
+      if (aiContentFilter && (AI_SLOP_REGEX.test(t.title) || AI_SLOP_REGEX.test(t.artist || '')))
+        return false;
+      return true;
+    });
+  };
+
+  const chips: HomeChip[] = homeData?.chips || [];
+  const quickPicks = useMemo(() => filterTracks(homeData?.quickPicks || []), [homeData, blockedArtists, aiContentFilter]);
+  const mixPages: HomeMixPage[] = useMemo(() => homeData?.mixPages || [], [homeData]);
+  const keepListening = useMemo(
+    () => filterTracks(homeData?.keepListening?.length ? homeData.keepListening : history),
+    [homeData, history, blockedArtists, aiContentFilter]
+  );
+  const forgottenFavorites = useMemo(
+    () => filterTracks(homeData?.forgottenFavorites?.length ? homeData.forgottenFavorites : likedSongs.slice(0, 18)),
+    [homeData, likedSongs, blockedArtists, aiContentFilter]
+  );
+  const spotifyPlaylists = useMemo(
+    () =>
+      homeData?.spotifyPlaylists?.length
+        ? homeData.spotifyPlaylists
+        : playlists.filter((p) => p.source === 'spotify').slice(0, 12),
+    [homeData, playlists]
+  );
+  const spotifyTracks = useMemo(
+    () => filterTracks(homeData?.spotifyTracks || []),
+    [homeData, blockedArtists, aiContentFilter]
+  );
+  const ytmShelves: YtmShelf[] = useMemo(() => homeData?.ytmShelves || [], [homeData]);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
     try {
-      const res = await window.electronAPI?.ytmusic.getCategory(selectedCategory, true);
-      const freshTracks = (res || []).map((t: any) => ({
-        ...t,
-        source: 'youtube' as const,
-      }));
-      queryClient.setQueryData(['liveCategory', selectedCategory], freshTracks);
+      const res = await window.electronAPI?.ytmusic?.getHome(selectedChip?.params, true);
+      queryClient.setQueryData(
+        ['personalizedHome', selectedChip?.params || 'default', likedSongs.length, playlists.length],
+        res
+      );
     } catch (err) {
-      console.error('Refresh error', err);
+      console.error('Home refresh error', err);
     } finally {
       setIsRefreshing(false);
     }
   };
 
-  const quickPicks = tracks.slice(0, 6);
-  const featured = tracks.slice(0, 5);
+  const handlePlayQueue = (queueList: Track[], index: number) => {
+    if (!queueList[index]) return;
+    setQueue(queueList, index);
+    void playTrack(queueList[index]);
+  };
 
-  const handlePlayTrack = (track: Track, index: number) => {
-    setQueue(tracks, index);
-    playTrack(track);
+  const handleShelfItemClick = async (item: YtmShelfItem, shelfSongs: Track[]) => {
+    if (item.type === 'song') {
+      const songTrack: Track = {
+        id: item.id,
+        title: item.title,
+        artist: item.subtitle,
+        duration: item.duration || 0,
+        thumbnail: item.thumbnail,
+        source: 'youtube',
+      };
+      const queueToUse = shelfSongs.length > 0 ? shelfSongs : [songTrack];
+      const idx = Math.max(0, queueToUse.findIndex((s) => s.id === item.id));
+      setQueue(queueToUse, idx);
+      void playTrack(songTrack);
+      return;
+    }
+
+    setLoadingShelfItem(item.id);
+    try {
+      if (item.type === 'album') {
+        const album = await window.electronAPI?.ytmusic?.getAlbum(item.id);
+        if (album?.tracks?.length) {
+          setQueue(album.tracks, 0);
+          void playTrack(album.tracks[0]);
+        }
+      } else if (item.type === 'artist') {
+        const artist = await window.electronAPI?.ytmusic?.getArtist(item.id);
+        const top = (artist as any)?.topSongs || (artist as any)?.songs || [];
+        if (top.length > 0) {
+          setQueue(top, 0);
+          void playTrack(top[0]);
+        }
+      } else {
+        const pl = await window.electronAPI?.ytmusic?.getPlaylist(item.id);
+        if (pl?.tracks?.length) {
+          setQueue(pl.tracks, 0);
+          void playTrack(pl.tracks[0]);
+        }
+      }
+    } catch (err) {
+      console.warn('Shelf item open failed:', err);
+    } finally {
+      setLoadingShelfItem(null);
+    }
+  };
+
+  const handlePlaySpotifyPlaylist = async (pl: any) => {
+    if (pl.tracks && pl.tracks.length > 0) {
+      setQueue(pl.tracks, 0);
+      void playTrack(pl.tracks[0]);
+      return;
+    }
+    const cleanId = String(pl.externalId || pl.id).replace(/^sp_pl_/, '');
+    setLoadingShelfItem(pl.id);
+    try {
+      const fetched = await window.electronAPI?.spotify?.getPlaylistTracks(cleanId);
+      if (fetched && fetched.length > 0) {
+        setQueue(fetched, 0);
+        void playTrack(fetched[0]);
+      } else {
+        navigate('/library');
+      }
+    } finally {
+      setLoadingShelfItem(null);
+    }
   };
 
   return (
-    <div className="p-6 space-y-8 pb-24">
+    <div className="p-6 space-y-8 pb-28">
       {/* Dynamic Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h1 className="text-3xl font-black text-on-surface tracking-tight mb-1">
-            {greeting} 🌸
-          </h1>
+          <h1 className="text-3xl font-black text-on-surface tracking-tight mb-1">{greeting} 🌸</h1>
           <p className="text-sm text-on-surface-variant font-medium">
-            Live dynamic charts & curated playlists from YouTube Music
+            Персональные рекомендации YouTube Music + Spotify • Dual-Deck AutoMix
           </p>
         </div>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => navigate('/explore')}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-surface-container hover:bg-surface-container-high text-xs font-semibold text-on-surface border border-outline-variant/20 transition-all"
+          >
+            <Compass size={14} className="text-primary" /> Обзор
+          </button>
+          <button
+            onClick={() => navigate('/recognize')}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-surface-container hover:bg-surface-container-high text-xs font-semibold text-on-surface border border-outline-variant/20 transition-all"
+          >
+            <AudioLines size={14} className="text-primary" /> Shazam
+          </button>
+          <button
+            onClick={() => navigate('/together')}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-surface-container hover:bg-surface-container-high text-xs font-semibold text-on-surface border border-outline-variant/20 transition-all"
+          >
+            <Users size={14} className="text-primary" /> Вместе
+          </button>
+          <button
+            onClick={handleRefresh}
+            disabled={isRefreshing || isFetching}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-primary/15 hover:bg-primary/25 text-xs font-bold text-primary transition-all active:scale-95 disabled:opacity-50"
+          >
+            <RefreshCw size={14} className={isRefreshing || isFetching ? 'animate-spin' : ''} />
+            <span>{isRefreshing ? 'Обновление…' : 'Обновить'}</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Connected Ecosystem Banner / Quick Stations */}
+      <section className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <button
-          onClick={handleRefresh}
-          disabled={isRefreshing || isFetching}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-surface-container hover:bg-surface-container-high text-xs font-semibold text-on-surface transition-all active:scale-95 disabled:opacity-50 border border-outline-variant/20 shadow-sm"
+          onClick={() => {
+            if (likedSongs.length > 0) {
+              const shuffled = [...likedSongs].sort(() => Math.random() - 0.5);
+              setQueue(shuffled, 0);
+              void playTrack(shuffled[0]);
+            } else if (quickPicks[0]) {
+              void startRadio(quickPicks[0]);
+            }
+          }}
+          className="group p-4 rounded-2xl bg-gradient-to-br from-primary/25 via-primary/10 to-surface-container border border-primary/20 text-left flex items-center justify-between hover:border-primary/50 transition-all"
         >
-          <RefreshCw size={14} className={isRefreshing || isFetching ? 'animate-spin text-primary' : ''} />
-          <span>{isRefreshing ? 'Fetching...' : 'Refresh Live'}</span>
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 text-xs font-bold text-primary">
+              <Heart size={14} fill="currentColor" /> Быстрый Микс Любимых
+            </div>
+            <p className="text-sm font-black text-on-surface">
+              {likedSongs.length > 0 ? `Любимые (${likedSongs.length} треков)` : 'Персональное Радио'}
+            </p>
+            <p className="text-[11px] text-on-surface-variant">Spotify + YouTube Music вперемешку</p>
+          </div>
+          <div className="w-10 h-10 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform">
+            <Shuffle size={16} />
+          </div>
         </button>
-      </div>
 
-      {/* Category Pills */}
-      <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
-        {CATEGORIES.map(({ id, label, icon: Icon }) => {
-          const active = selectedCategory === id;
-          return (
-            <button
-              key={id}
-              onClick={() => setSelectedCategory(id)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all duration-200 ${
-                active
-                  ? 'bg-primary text-on-primary shadow-lg shadow-primary/20 scale-105'
-                  : 'bg-surface-container text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface'
-              }`}
-            >
-              <Icon size={14} />
-              {label}
-            </button>
-          );
-        })}
-      </div>
+        <button
+          onClick={() => navigate('/library')}
+          className="p-4 rounded-2xl bg-surface-container border border-outline-variant/20 text-left flex items-center justify-between hover:bg-surface-container-high transition-all"
+        >
+          <div className="space-y-1">
+            <p className="text-xs font-bold text-on-surface-variant">Единая медиатека</p>
+            <p className="text-sm font-black text-on-surface">
+              {[spotifyConnected && 'Spotify', ytmConnected && 'YouTube', scConnected && 'SoundCloud']
+                .filter(Boolean)
+                .join(' • ') || 'Подключите аккаунты'}
+            </p>
+            <p className="text-[11px] text-on-surface-variant">
+              {likedSongs.length} любимых • {playlists.length} плейлистов
+            </p>
+          </div>
+          <span className="px-2.5 py-1 rounded-lg bg-surface-container-highest text-[11px] font-bold text-primary">
+            Открыть
+          </span>
+        </button>
 
-      {/* Quick Picks 2-Column Grid (Spotify Style) */}
-      {quickPicks.length > 0 && !isLoading && (
-        <section className="space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {quickPicks.map((track, i) => (
-              <div
-                key={`quick-${track.id}-${i}`}
-                onClick={() => handlePlayTrack(track, i)}
-                className="group flex items-center gap-3 p-2 rounded-xl bg-surface-container/70 hover:bg-surface-container-high/90 transition-all duration-200 cursor-pointer shadow-sm overflow-hidden"
+        <button
+          onClick={() => navigate('/integrations')}
+          className="p-4 rounded-2xl bg-surface-container border border-outline-variant/20 text-left flex items-center justify-between hover:bg-surface-container-high transition-all"
+        >
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 text-xs font-bold text-emerald-400">
+              <PlugZap size={14} /> Интеграции &amp; Источники
+            </div>
+            <p className="text-sm font-black text-on-surface">Spotify + YT Music + SC</p>
+            <p className="text-[11px] text-on-surface-variant">Авто-синхронизация и умный свитчер</p>
+          </div>
+          <span className="px-2.5 py-1 rounded-lg bg-surface-container-highest text-[11px] font-bold text-on-surface">
+            Настроить
+          </span>
+        </button>
+      </section>
+
+      {/* Real YouTube Music Mood & Activity Chips (from FEmusic_home) */}
+      {chips.length > 0 && (
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
+          <button
+            onClick={() => setSelectedChip(null)}
+            className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+              selectedChip === null
+                ? 'bg-primary text-on-primary shadow-lg shadow-primary/20'
+                : 'bg-surface-container text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface'
+            }`}
+          >
+            Для тебя (Все)
+          </button>
+          {chips.map((chip) => {
+            const active = selectedChip?.params === chip.params;
+            return (
+              <button
+                key={chip.title}
+                onClick={() => setSelectedChip(active ? null : chip)}
+                className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+                  active
+                    ? 'bg-primary text-on-primary shadow-lg shadow-primary/20'
+                    : 'bg-surface-container text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface'
+                }`}
               >
-                <div className="w-14 h-14 rounded-lg overflow-hidden bg-surface-container-highest shrink-0 shadow">
-                  {track.thumbnail ? (
-                    <img src={track.thumbnail} alt="" className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-xl">🎵</div>
-                  )}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-bold text-on-surface truncate">{track.title}</p>
-                  <p className="text-[11px] text-on-surface-variant truncate mt-0.5">{track.artist}</p>
-                </div>
-                <div className="mr-3 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <div className="w-8 h-8 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-md">
-                    <Play size={14} fill="currentColor" />
+                {chip.title}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* 1. Быстрый выбор (Personalized Quick Picks: YouTube Radio Seeds + Spotify Favorites) */}
+      {quickPicks.length > 0 && (
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Sparkles size={18} className="text-primary" />
+              <div>
+                <h2 className="text-lg font-bold text-on-surface tracking-tight">Быстрый выбор</h2>
+                <p className="text-[11px] text-on-surface-variant">
+                  Подобрано по вашей истории YouTube Music и любимым трекам Spotify
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => handlePlayQueue(quickPicks, 0)}
+              className="text-xs font-bold text-primary hover:underline flex items-center gap-1"
+            >
+              <Play size={12} fill="currentColor" /> Играть всё
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+            {quickPicks.slice(0, 12).map((track, i) => {
+              const isSp = track.source === 'spotify' || track.id.startsWith('spotify:');
+              return (
+                <div
+                  key={`qp-${track.id}-${i}`}
+                  onClick={() => handlePlayQueue(quickPicks, i)}
+                  className="group flex items-center gap-3 p-2 rounded-xl bg-surface-container/80 hover:bg-surface-container-high transition-all duration-200 cursor-pointer border border-outline-variant/10 hover:border-primary/30"
+                >
+                  <div className="relative w-13 h-13 rounded-lg overflow-hidden bg-surface-container-highest shrink-0 shadow">
+                    {track.thumbnail ? (
+                      <img
+                        src={track.thumbnail}
+                        alt=""
+                        className="w-12 h-12 object-cover group-hover:scale-105 transition-transform"
+                      />
+                    ) : (
+                      <div className="w-12 h-12 flex items-center justify-center text-lg">🎵</div>
+                    )}
                   </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <span
+                        className={`text-[9px] font-black px-1.5 py-0.5 rounded uppercase shrink-0 ${
+                          isSp
+                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                            : 'bg-red-500/20 text-red-300 border border-red-500/30'
+                        }`}
+                      >
+                        {isSp ? 'SP' : 'YT'}
+                      </span>
+                      <p className="text-xs font-bold text-on-surface truncate">{track.title}</p>
+                    </div>
+                    <p className="text-[11px] text-on-surface-variant truncate mt-0.5">{track.artist}</p>
+                  </div>
+                  <div className="mr-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="w-8 h-8 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-md">
+                      <Play size={13} fill="currentColor" />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* 2. Персональные миксы (HomeMixPagesSection port: 9 tracks per mix from YT & Spotify) */}
+      {mixPages.length > 0 && (
+        <section className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Disc3 size={18} className="text-primary" />
+            <div>
+              <h2 className="text-lg font-bold text-on-surface tracking-tight">
+                Персональные миксы для тебя
+              </h2>
+              <p className="text-[11px] text-on-surface-variant">
+                По 9 треков в каждом миксе на основе твоих прослушиваний YouTube Music и Spotify
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3.5">
+            {mixPages.slice(0, 8).map((mix) => {
+              const isSp = mix.source === 'spotify';
+              const covers = mix.tracks.map((t) => t.thumbnail).filter(Boolean).slice(0, 4);
+              return (
+                <div
+                  key={mix.id}
+                  onClick={() => handlePlayQueue(mix.tracks, 0)}
+                  className="group p-3.5 rounded-2xl bg-surface-container hover:bg-surface-container-high border border-outline-variant/15 hover:border-primary/40 transition-all cursor-pointer flex flex-col justify-between gap-3 shadow-sm"
+                >
+                  <div className="flex items-start gap-3">
+                    {/* 2x2 Cover Collage */}
+                    <div className="w-16 h-16 rounded-xl overflow-hidden bg-surface-container-highest grid grid-cols-2 grid-rows-2 shrink-0 shadow-md">
+                      {covers.length >= 4 ? (
+                        covers.map((c, idx) => (
+                          <img key={idx} src={c} alt="" className="w-full h-full object-cover" />
+                        ))
+                      ) : covers[0] ? (
+                        <img src={covers[0]} alt="" className="w-full h-full object-cover col-span-2 row-span-2" />
+                      ) : (
+                        <div className="col-span-2 row-span-2 flex items-center justify-center text-xl">💿</div>
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <span
+                        className={`inline-block text-[9px] font-black px-2 py-0.5 rounded-full uppercase mb-1 ${
+                          isSp
+                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                            : 'bg-red-500/20 text-red-300 border border-red-500/30'
+                        }`}
+                      >
+                        {isSp ? 'Spotify Jam' : 'YouTube Mix'}
+                      </span>
+                      <h3 className="text-sm font-black text-on-surface truncate">{mix.title}</h3>
+                      <p className="text-[11px] text-on-surface-variant line-clamp-2 mt-0.5">
+                        {mix.subtitle}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Mini tracklist preview */}
+                  <div className="space-y-1 pt-1 border-t border-outline-variant/15">
+                    {mix.tracks.slice(0, 3).map((t, idx) => (
+                      <div key={`${t.id}-${idx}`} className="flex items-center justify-between text-[11px] gap-2">
+                        <span className="text-on-surface/90 font-medium truncate">
+                          {idx + 1}. {t.title}
+                        </span>
+                        <span className="text-on-surface-variant truncate max-w-[90px] shrink-0">
+                          {t.artist}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1">
+                    <span className="text-[10px] font-semibold text-on-surface-variant">
+                      {mix.tracks.length} треков
+                    </span>
+                    <span className="inline-flex items-center gap-1 text-xs font-bold text-primary group-hover:translate-x-0.5 transition-transform">
+                      <Play size={12} fill="currentColor" /> Включить микс
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* 3. Spotify: Плейлисты и Дейли Миксы (SpotifyDailyDiscoverSection port) */}
+      {spotifyPlaylists.length > 0 && (
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <ListMusic size={18} className="text-emerald-400" />
+              <div>
+                <h2 className="text-lg font-bold text-on-surface tracking-tight">
+                  Spotify: Твои плейлисты и миксы
+                </h2>
+                <p className="text-[11px] text-on-surface-variant">
+                  Синхронизировано из твоего аккаунта Spotify
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => navigate('/library')}
+              className="text-xs font-bold text-emerald-400 hover:underline"
+            >
+              Все плейлисты ({spotifyPlaylists.length})
+            </button>
+          </div>
+
+          <div className="flex gap-3.5 overflow-x-auto pb-2 scrollbar-none">
+            {spotifyPlaylists.map((pl: any) => (
+              <div
+                key={pl.id}
+                onClick={() => void handlePlaySpotifyPlaylist(pl)}
+                className="group w-40 shrink-0 p-3 rounded-2xl bg-surface-container hover:bg-surface-container-high border border-outline-variant/15 hover:border-emerald-500/40 transition-all cursor-pointer flex flex-col gap-2"
+              >
+                <div className="relative aspect-square rounded-xl overflow-hidden bg-surface-container-highest">
+                  {pl.thumbnail ? (
+                    <img
+                      src={pl.thumbnail}
+                      alt=""
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-3xl">💚</div>
+                  )}
+                  <span className="absolute top-2 left-2 text-[9px] font-black px-1.5 py-0.5 rounded bg-black/70 text-emerald-300 border border-emerald-500/30">
+                    SPOTIFY
+                  </span>
+                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                    <div className="w-10 h-10 rounded-full bg-emerald-500 text-black flex items-center justify-center shadow-lg">
+                      <Play size={18} fill="currentColor" />
+                    </div>
+                  </div>
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-on-surface truncate">{pl.name}</p>
+                  <p className="text-[11px] text-on-surface-variant truncate">
+                    {pl.trackCount ? `${pl.trackCount} треков` : pl.description || 'Spotify'}
+                  </p>
                 </div>
               </div>
             ))}
@@ -142,26 +551,96 @@ export default function HomePage() {
         </section>
       )}
 
-      {/* Recently Played */}
-      {history.length > 0 && (
+      {/* 4. Spotify: Избранные и рекомендуемые треки (SpotifyTrendingSection port) */}
+      {spotifyTracks.length > 0 && (
         <section className="space-y-3">
-          <div className="flex items-center gap-2">
-            <History size={18} className="text-primary" />
-            <h2 className="text-lg font-bold text-on-surface tracking-tight">Recently Played</h2>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Flame size={18} className="text-emerald-400" />
+              <h2 className="text-lg font-bold text-on-surface tracking-tight">
+                В твоём вкусе из Spotify
+              </h2>
+            </div>
+            <button
+              onClick={() => handlePlayQueue(spotifyTracks, 0)}
+              className="text-xs font-bold text-emerald-400 hover:underline flex items-center gap-1"
+            >
+              <Play size={12} fill="currentColor" /> Играть подборку
+            </button>
+          </div>
+
+          <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-none">
+            {spotifyTracks.slice(0, 14).map((track, i) => (
+              <div
+                key={`sp-top-${track.id}-${i}`}
+                onClick={() => handlePlayQueue(spotifyTracks, i)}
+                className="group w-36 shrink-0 p-2.5 rounded-2xl bg-surface-container hover:bg-surface-container-high border border-outline-variant/10 hover:border-emerald-500/40 transition-all cursor-pointer flex flex-col gap-2"
+              >
+                <div className="relative aspect-square rounded-xl overflow-hidden bg-surface-container-highest">
+                  {track.thumbnail ? (
+                    <img
+                      src={track.thumbnail}
+                      alt=""
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-2xl">🎵</div>
+                  )}
+                  <span className="absolute top-1.5 left-1.5 text-[9px] font-black px-1.5 py-0.5 rounded bg-black/70 text-emerald-300">
+                    SP
+                  </span>
+                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                    <div className="w-9 h-9 rounded-full bg-emerald-500 text-black flex items-center justify-center shadow-lg">
+                      <Play size={16} fill="currentColor" />
+                    </div>
+                  </div>
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-on-surface truncate">{track.title}</p>
+                  <p className="text-[11px] text-on-surface-variant truncate">{track.artist}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* 5. Послушать ещё раз (YouTube Music History + Local History) */}
+      {keepListening.length > 0 && (
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <History size={18} className="text-primary" />
+              <div>
+                <h2 className="text-lg font-bold text-on-surface tracking-tight">
+                  Послушать ещё раз
+                </h2>
+                <p className="text-[11px] text-on-surface-variant">
+                  Твоя реальная история прослушиваний YouTube Music и локального плеера
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => handlePlayQueue(keepListening, 0)}
+              className="text-xs font-bold text-primary hover:underline flex items-center gap-1"
+            >
+              <Play size={12} fill="currentColor" /> Запустить очередь
+            </button>
           </div>
           <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-none">
-            {history.map((track, i) => (
+            {keepListening.slice(0, 16).map((track, i) => (
               <div
-                key={`hist-${track.id}-${i}`}
-                onClick={() => {
-                  setQueue(history, i);
-                  playTrack(track);
-                }}
+                key={`keep-${track.id}-${i}`}
+                onClick={() => handlePlayQueue(keepListening, i)}
                 className="group w-36 shrink-0 p-2.5 rounded-2xl bg-surface-container hover:bg-surface-container-high transition-all duration-200 cursor-pointer flex flex-col gap-2 shadow-sm"
               >
                 <div className="relative aspect-square rounded-xl overflow-hidden bg-surface-container-highest">
                   {track.thumbnail ? (
-                    <img src={track.thumbnail} alt="" className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105" />
+                    <img
+                      src={track.thumbnail}
+                      alt=""
+                      className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                    />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center text-2xl">🎵</div>
                   )}
@@ -181,86 +660,113 @@ export default function HomePage() {
         </section>
       )}
 
-      {/* Featured Top Picks Carousel/Grid */}
-      {featured.length > 0 && !isLoading && (
-        <section className="space-y-3">
-          <h2 className="text-lg font-bold text-on-surface tracking-tight">Curated Highlights</h2>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-            {featured.map((track, i) => (
-              <div
-                key={`feat-${track.id}-${i}`}
-                onClick={() => handlePlayTrack(track, i)}
-                className="group relative p-3 rounded-2xl bg-surface-container hover:bg-surface-container-high transition-all duration-200 cursor-pointer flex flex-col gap-2.5 shadow-sm hover:shadow-lg"
-              >
-                <div className="relative aspect-square rounded-xl overflow-hidden bg-surface-container-highest">
-                  {track.thumbnail ? (
-                    <img src={track.thumbnail} alt="" className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105" />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-4xl">🎵</div>
-                  )}
-                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                    <div className="w-11 h-11 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-lg transform translate-y-2 group-hover:translate-y-0 transition-transform">
-                      <Play size={20} fill="currentColor" />
+      {/* 6. Персональные полки YouTube Music (FEmusic_home shelves) */}
+      {ytmShelves.map((shelf, sIdx) => {
+        const shelfSongs: Track[] = shelf.items
+          .filter((x) => x.type === 'song')
+          .map((x) => ({
+            id: x.id,
+            title: x.title,
+            artist: x.subtitle,
+            duration: x.duration || 0,
+            thumbnail: x.thumbnail,
+            source: 'youtube' as const,
+          }));
+        return (
+          <section key={`ytm-shelf-${sIdx}`} className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-bold text-on-surface tracking-tight">{shelf.title}</h2>
+              {shelfSongs.length > 0 && (
+                <button
+                  onClick={() => handlePlayQueue(shelfSongs, 0)}
+                  className="text-xs font-bold text-primary hover:underline flex items-center gap-1"
+                >
+                  <Play size={12} fill="currentColor" /> Играть всё
+                </button>
+              )}
+            </div>
+            <div className="flex gap-3.5 overflow-x-auto pb-2 scrollbar-none">
+              {shelf.items.map((item, i) => (
+                <div
+                  key={`${item.id}-${i}`}
+                  onClick={() => void handleShelfItemClick(item, shelfSongs)}
+                  className="group w-40 shrink-0 p-3 rounded-2xl bg-surface-container hover:bg-surface-container-high border border-outline-variant/10 hover:border-red-500/40 transition-all cursor-pointer flex flex-col gap-2"
+                >
+                  <div className="relative aspect-square rounded-xl overflow-hidden bg-surface-container-highest">
+                    {item.thumbnail ? (
+                      <img
+                        src={item.thumbnail}
+                        alt=""
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-2xl">🎵</div>
+                    )}
+                    <span className="absolute top-1.5 left-1.5 text-[9px] font-black px-1.5 py-0.5 rounded bg-black/70 text-red-300 uppercase">
+                      {item.type === 'song' ? 'YT' : item.type}
+                    </span>
+                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                      <div className="w-9 h-9 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-lg">
+                        {loadingShelfItem === item.id ? (
+                          <RefreshCw size={15} className="animate-spin" />
+                        ) : (
+                          <Play size={16} fill="currentColor" />
+                        )}
+                      </div>
                     </div>
                   </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-on-surface truncate">{item.title}</p>
+                    <p className="text-[11px] text-on-surface-variant truncate">{item.subtitle}</p>
+                  </div>
                 </div>
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-on-surface truncate">{track.title}</p>
-                  <p className="text-xs text-on-surface-variant truncate mt-0.5">{track.artist}</p>
-                </div>
-              </div>
+              ))}
+            </div>
+          </section>
+        );
+      })}
+
+      {/* 7. Забытые фавориты (Forgotten Favorites from Unified Library) */}
+      {forgottenFavorites.length > 0 && (
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-bold text-on-surface tracking-tight">
+              Из вашей коллекции ({forgottenFavorites.length})
+            </h2>
+            <button
+              onClick={() => handlePlayQueue(forgottenFavorites, 0)}
+              className="text-xs font-semibold text-primary hover:underline flex items-center gap-1"
+            >
+              <Play size={12} fill="currentColor" /> Воспроизвести все
+            </button>
+          </div>
+          <div className="space-y-1">
+            {forgottenFavorites.slice(0, 15).map((track, i) => (
+              <TrackRow
+                key={`fav-${track.id}-${i}`}
+                track={track}
+                index={i}
+                showIndex
+                queue={forgottenFavorites}
+              />
             ))}
           </div>
         </section>
       )}
 
-      {/* Full Songs List */}
-      <section className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-bold text-on-surface tracking-tight">
-            {CATEGORIES.find((c) => c.id === selectedCategory)?.label || 'Songs'} ({tracks.length})
-          </h2>
-          {tracks.length > 0 && (
-            <button
-              onClick={() => handlePlayTrack(tracks[0], 0)}
-              className="text-xs font-semibold text-primary hover:underline flex items-center gap-1"
-            >
-              <Play size={12} fill="currentColor" /> Play All
-            </button>
-          )}
-        </div>
-
-        {isLoading ? (
-          <div className="space-y-2">
-            {Array.from({ length: 8 }).map((_, i) => (
-              <div key={i} className="flex items-center gap-3 p-3 bg-surface-container rounded-xl animate-pulse">
-                <div className="w-10 h-10 rounded-lg bg-surface-container-high shrink-0" />
-                <div className="flex-1 space-y-1.5">
-                  <div className="h-4 bg-surface-container-high rounded w-2/5" />
-                  <div className="h-3 bg-surface-container-high rounded w-1/4" />
-                </div>
+      {isLoading && quickPicks.length === 0 && (
+        <div className="space-y-2">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-3 p-3 bg-surface-container rounded-xl animate-pulse">
+              <div className="w-12 h-12 rounded-lg bg-surface-container-high shrink-0" />
+              <div className="flex-1 space-y-1.5">
+                <div className="h-4 bg-surface-container-high rounded w-2/5" />
+                <div className="h-3 bg-surface-container-high rounded w-1/4" />
               </div>
-            ))}
-          </div>
-        ) : tracks.length > 0 ? (
-          <div className="space-y-1">
-            {tracks.map((track, i) => (
-              <TrackRow key={`${track.id}-${i}`} track={track} index={i} showIndex queue={tracks} />
-            ))}
-          </div>
-        ) : (
-          <div className="flex flex-col items-center justify-center py-16 text-on-surface-variant gap-3">
-            <Radio size={40} className="text-primary/50" />
-            <p className="text-sm">Fetching live songs from YouTube Music...</p>
-            <button
-              onClick={handleRefresh}
-              className="px-4 py-2 rounded-xl bg-primary text-on-primary text-xs font-semibold"
-            >
-              Try Again
-            </button>
-          </div>
-        )}
-      </section>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

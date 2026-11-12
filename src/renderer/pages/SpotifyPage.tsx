@@ -1,15 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Heart, ListMusic, LogIn, LogOut, Key, CheckCircle2, AlertCircle, Play, ChevronLeft } from 'lucide-react';
+import { Heart, ListMusic, LogIn, LogOut, Key, CheckCircle2, AlertCircle, Play, ChevronLeft, RefreshCw } from 'lucide-react';
 import TrackRow from '../components/TrackRow';
-import { Track } from '../store';
+import { Track, usePlayerStore } from '../store';
 import { usePlayer } from '../lib/usePlayer';
-import { usePlayerStore } from '../store';
 
 export default function SpotifyPage() {
   const queryClient = useQueryClient();
   const { playTrack } = usePlayer();
-  const { setQueue } = usePlayerStore();
+  const { setQueue, upsertLikedSongs } = usePlayerStore();
 
   const [activeTab, setActiveTab] = useState<'liked' | 'playlists'>('liked');
   const [selectedPlaylist, setSelectedPlaylist] = useState<{ id: string; name: string } | null>(null);
@@ -70,12 +69,19 @@ export default function SpotifyPage() {
     },
   });
 
-  // Liked songs query
-  const { data: likedSongs = [], isLoading: likedLoading } = useQuery<Track[]>({
+  // Liked songs query (paged up to 250 with immediate DB commits on backend)
+  const { data: likedSongs = [], isLoading: likedLoading, refetch: refetchLiked, isFetching: likedFetching } = useQuery<Track[]>({
     queryKey: ['spotifyLiked'],
-    queryFn: () => window.electronAPI?.spotify.getLikedSongs(50) ?? Promise.resolve([]),
+    queryFn: () => window.electronAPI?.spotify.getLikedSongs(250) ?? Promise.resolve([]),
     enabled: !!status?.connected,
   });
+
+  // Sync fetched Spotify likes into global store so Library -> Liked Songs reflects them immediately
+  useEffect(() => {
+    if (likedSongs.length > 0) {
+      upsertLikedSongs(likedSongs);
+    }
+  }, [likedSongs, upsertLikedSongs]);
 
   // Playlists query
   const { data: playlists = [], isLoading: playlistsLoading } = useQuery({
@@ -119,8 +125,8 @@ export default function SpotifyPage() {
           </div>
           <h1 className="text-3xl font-bold text-on-surface">Connect to Spotify</h1>
           <p className="text-sm text-on-surface-variant leading-relaxed">
-            Link your Spotify account to import your Liked Songs and Playlists directly into ArchiveTune.
-            Songs are resolved and played via high-quality audio streams without requiring Spotify Premium.
+            Link your Spotify account to sync Liked Songs (with immediate DB commits), Playlists, BPM audio features for Smart DJ Automix, and Canvaz looping video covers.
+            Songs are resolved via Universal Fallback Matrix (Tidal Lossless &rarr; YT Music &rarr; SoundCloud &rarr; Deezer) without requiring Spotify Premium.
           </p>
         </div>
 
@@ -200,11 +206,11 @@ export default function SpotifyPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-on-surface-variant pt-2">
           <div className="p-3 bg-surface-container/60 rounded-xl flex items-start gap-2">
             <CheckCircle2 size={16} className="text-[#1DB954] shrink-0 mt-0.5" />
-            <span>Automatic Song Matching with YouTube Music</span>
+            <span>Universal TrackMatching.kt Scoring & Lossless Playback</span>
           </div>
           <div className="p-3 bg-surface-container/60 rounded-xl flex items-start gap-2">
             <CheckCircle2 size={16} className="text-[#1DB954] shrink-0 mt-0.5" />
-            <span>Synced Waterfall Lyrics via LRCLib</span>
+            <span>Spotify Canvaz Looping Video Covers + BPM Automix</span>
           </div>
         </div>
       </div>
@@ -231,16 +237,25 @@ export default function SpotifyPage() {
                 Connected
               </span>
             </div>
-            <p className="text-xs text-on-surface-variant">Spotify Library Synced</p>
+            <p className="text-xs text-on-surface-variant">Spotify Library, Canvaz & BPM Synced</p>
           </div>
         </div>
 
-        <button
-          onClick={() => disconnectMutation.mutate()}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-surface-container-high hover:bg-error/20 hover:text-error text-xs font-medium text-on-surface-variant transition-colors"
-        >
-          <LogOut size={14} /> Disconnect
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => refetchLiked()}
+            disabled={likedFetching}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-surface-container-high hover:bg-primary/20 hover:text-primary text-xs font-medium text-on-surface-variant transition-colors"
+          >
+            <RefreshCw size={13} className={likedFetching ? 'animate-spin' : ''} /> Sync Likes
+          </button>
+          <button
+            onClick={() => disconnectMutation.mutate()}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-surface-container-high hover:bg-error/20 hover:text-error text-xs font-medium text-on-surface-variant transition-colors"
+          >
+            <LogOut size={14} /> Disconnect
+          </button>
+        </div>
       </div>
 
       {/* Detail view for selected playlist */}
@@ -313,7 +328,7 @@ export default function SpotifyPage() {
           {activeTab === 'liked' && (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <p className="text-xs text-on-surface-variant">Your Spotify Liked Songs</p>
+                <p className="text-xs text-on-surface-variant">Your Spotify Liked Songs (persisted locally to SQLite)</p>
                 {likedSongs.length > 0 && (
                   <button
                     onClick={() => handlePlayAll(likedSongs, 0)}

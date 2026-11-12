@@ -1,19 +1,42 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Palette,
   Radio,
   Disc3,
   Info,
   ExternalLink,
-  ListMusic,
   Sliders,
   Sparkles,
-  FolderDown,
-  Clock,
+  Monitor,
+  Shield,
+  Volume2,
+  Download,
+  HardDriveDownload,
+  Activity,
+  PlugZap,
+  Check,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { useUIStore, usePlayerStore } from '../store';
+import {
+  useUIStore,
+  usePlayerStore,
+  useAccountsStore,
+  PlayerStyleId,
+  AutomixMode,
+  AudioSourceId,
+} from '../store';
 import { usePlayer } from '../lib/usePlayer';
+
+const EQ_LABELS = ['31Hz', '62Hz', '125Hz', '250Hz', '500Hz', '1kHz', '2kHz', '4kHz', '8kHz', '16kHz'];
+const EQ_PRESET_MAP: Record<string, number[]> = {
+  Flat: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  'Harman Target': [4, 3.5, 2, 0, -1, 0, 2, 3.5, 3, 2],
+  'Bass Boost': [6, 5, 4, 2, 0, 0, 0, 1, 2, 2],
+  Vocal: [-2, -1, 0, 2, 4, 4, 3, 1, 0, -1],
+  Electronic: [5, 4, 1, 0, -2, 1, 1, 3, 4, 5],
+  Rock: [4.5, 3, 1.5, -1, -1.5, 1, 3, 4, 4.5, 4],
+  Acoustic: [3, 3, 2, 1, 2, 2, 3, 3, 2, 2],
+};
 
 const SEED_COLORS = [
   { name: 'Lavender', hex: '#cbb9f5' },
@@ -26,81 +49,348 @@ const SEED_COLORS = [
   { name: 'Sky Blue', hex: '#74b9ff' },
 ];
 
+const PLAYER_STYLES: Array<{ id: PlayerStyleId; name: string; desc: string }> = [
+  { id: 'flamingo', name: 'Flamingo (Apple Music)', desc: 'Сплит-лейаут, динамическая обложка и свечение караоке' },
+  { id: 'v8_immersive', name: 'V8 Immersive Extended', desc: 'Полноэкранный Motion Canvas и матовый док' },
+  { id: 'v10_expressive', name: 'V10 Expressive', desc: 'Центрированный M3 Expressive дизайн' },
+  { id: 'bitchord', name: 'BitChord', desc: 'Контрастный минималистичный плеер' },
+  { id: 'simpmusic', name: 'SimpMusic', desc: 'Карточный интерфейс с синхронными текстами' },
+  { id: 'spatialflow', name: 'SpatialFlow', desc: '3D-объёмная обложка и амбиент-подсветка' },
+  { id: 'tiktok', name: 'TikTok Vertical', desc: 'Вертикальный полноэкранный поток' },
+  { id: 'classic', name: 'Classic ArchiveTune', desc: 'Классический стиль ArchiveTune' },
+];
+
+const AUTOMIX_MODES: Array<{ id: AutomixMode; label: string; desc: string }> = [
+  { id: 'auto', label: 'Smart Auto', desc: 'Анализ BPM/Intro-Outro (подбор перехода автоматически)' },
+  { id: 'dj_blend', label: 'DJ Equal-Power + Filter', desc: 'Плавный кроссфейд с низкочастотным фильтром' },
+  { id: 'filter_ride', label: 'Filter Ride', desc: 'Мягкий срез басов уходящего трека' },
+  { id: 'equal_power', label: 'Equal-Power Fade', desc: 'Равномерный S-curve кроссфейд' },
+  { id: 'gapless', label: 'Pure Gapless', desc: 'Без наложения, нулевой зазор' },
+];
+
+const SPONSORBLOCK_CATEGORIES = [
+  { id: 'sponsor', label: 'Спонсоры' },
+  { id: 'intro', label: 'Интро / Заставки' },
+  { id: 'outro', label: 'Аутро / Титры' },
+  { id: 'music_offtopic', label: 'Немузыкальные вставки' },
+  { id: 'selfpromo', label: 'Самореклама' },
+  { id: 'interaction', label: 'Призывы подписаться' },
+];
+
 export default function SettingsPage() {
   const navigate = useNavigate();
-  const { theme, setTheme, seedColor, setSeedColor } = useUIStore();
+  const {
+    theme,
+    setTheme,
+    seedColor,
+    setSeedColor,
+    dynamicColorFromArt,
+    setDynamicColorFromArt,
+    uiScale,
+    setUiScale,
+    playerStyle,
+    setPlayerStyle,
+    visualizerEnabled,
+    visualizerStyle,
+    setVisualizer,
+    closeToTray,
+    mprisEnabled,
+    discordRpc,
+    localApiEnabled,
+    hardwareAcceleration,
+    lastfmApiKey,
+    lastfmSecret,
+    lastfmSessionKey,
+    listenBrainzEnabled,
+    listenBrainzToken,
+    showSmartSwitchToasts,
+    downloadFormat,
+    embedMetadataAndLyrics,
+    setDesktopSetting,
+    pushToast,
+  } = useUIStore();
+
   const {
     normalization,
+    audioCompressor,
+    exponentialVolume,
+    pitchSemitones,
+    bassBoost,
+    stereoWidener,
+    silenceSkip,
+    audioDevice,
+    speed,
     crossfade,
-    setCrossfade,
+    smartDjAutomix,
+    automixMode,
+    gaplessAlbum,
+    preferredAudioSource,
+    enabledSources,
+    universalFallback,
+    autoUpgradeLossless,
+    eqEnabled,
+    eqPreset,
+    eqBands,
+    canvasEnabled,
     lyricsOffset,
-    setLyricsOffset,
+    lyricsFontSize,
+    lyricsWordByWord,
+    lyricsRomanize,
+    lyricsTranslate,
+    lyricsTranslateLang,
+    sponsorBlockEnabled,
+    sponsorBlockCategories,
+    aiContentFilter,
+    setDspOption,
+    setCrossfade,
+    setSmartDjAutomix,
+    setAutomixMode,
+    setGaplessAlbum,
+    setEqualizerState,
+    setPreferredAudioSource,
+    toggleSourceEnabled,
+    setUniversalFallback,
+    setAutoUpgradeLossless,
+    setCanvasEnabled,
+    setLyricsSettings,
   } = usePlayerStore();
-  const { toggleNormalization } = usePlayer();
 
-  const [apiKey, setApiKey] = useState('');
-  const [apiSecret, setApiSecret] = useState('');
-  const [sessionKey, setSessionKey] = useState('');
-  const [scrobbleStatus, setScrobbleStatus] = useState<string | null>(null);
+  const { syncingAll, syncAllPlatforms } = useAccountsStore();
+  const { changeSpeed, toggleNormalization } = usePlayer();
+
+  const [settingsCategory, setSettingsCategory] = useState<
+    'all' | 'ui' | 'sources' | 'audio' | 'lyrics' | 'system'
+  >('all');
+  const [extSettings, setExtSettings] = useState({
+    autoSwitchThreshold: 88,
+    preferLosslessOverExact: true,
+    autoSyncSpotify: true,
+    autoSyncYtm: true,
+    autoSyncSc: true,
+    autoRadioOnQueueEnd: true,
+    prebufferNextTrack: true,
+    compactTrackRows: false,
+    ambientBackgroundBlur: true,
+    replayGainMode: 'track' as 'off' | 'track' | 'album',
+    targetLoudnessLufs: -14,
+    keyboardShortcutsEnabled: true,
+  });
+
+  useEffect(() => {
+    window.electronAPI?.db?.getInitialState?.().then((db) => {
+      if (db?.settings) {
+        setExtSettings((prev) => ({
+          ...prev,
+          autoSwitchThreshold: db.settings.autoSwitchThreshold ?? 88,
+          preferLosslessOverExact: db.settings.preferLosslessOverExact ?? true,
+          autoSyncSpotify: db.settings.autoSyncSpotify ?? true,
+          autoSyncYtm: db.settings.autoSyncYtm ?? true,
+          autoSyncSc: db.settings.autoSyncSc ?? true,
+          autoRadioOnQueueEnd: db.settings.autoRadioOnQueueEnd ?? true,
+          prebufferNextTrack: db.settings.prebufferNextTrack ?? true,
+          compactTrackRows: db.settings.compactTrackRows ?? false,
+          ambientBackgroundBlur: db.settings.ambientBackgroundBlur ?? true,
+          replayGainMode: db.settings.replayGainMode ?? 'track',
+          targetLoudnessLufs: db.settings.targetLoudnessLufs ?? -14,
+          keyboardShortcutsEnabled: db.settings.keyboardShortcutsEnabled ?? true,
+        }));
+      }
+    });
+  }, []);
+
+  const updateExtSetting = (patch: Partial<typeof extSettings>) => {
+    setExtSettings((prev) => ({ ...prev, ...patch }));
+    setDspOption(patch as any);
+  };
+
+  const [audioDevices, setAudioDevices] = useState<Array<{ id: string; description: string }>>([]);
+  const [apiKey, setApiKey] = useState(lastfmApiKey);
+  const [apiSecret, setApiSecret] = useState(lastfmSecret);
+  const [sessionKey, setSessionKey] = useState(lastfmSessionKey);
+  const [lbToken, setLbToken] = useState(listenBrainzToken);
+
+  useEffect(() => {
+    setApiKey(lastfmApiKey);
+    setApiSecret(lastfmSecret);
+    setSessionKey(lastfmSessionKey);
+    setLbToken(listenBrainzToken);
+  }, [lastfmApiKey, lastfmSecret, lastfmSessionKey, listenBrainzToken]);
+
+  useEffect(() => {
+    window.electronAPI?.player
+      ?.getAudioDevices()
+      .then((list) => {
+        if (Array.isArray(list)) setAudioDevices(list);
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleAudioDeviceChange = async (dev: string) => {
+    await window.electronAPI?.player?.setAudioDevice(dev);
+    setDspOption({ audioDevice: dev });
+    pushToast('Аудио-выход обновлён', 'success');
+  };
 
   const handleSaveScrobble = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const res = await window.electronAPI?.scrobble.configure(apiKey, apiSecret, sessionKey);
+      const res = await window.electronAPI?.scrobble?.configure(apiKey, apiSecret, sessionKey);
+      setDesktopSetting({
+        lastfmApiKey: apiKey,
+        lastfmSecret: apiSecret,
+        lastfmSessionKey: sessionKey,
+        listenBrainzToken: lbToken,
+      });
       if (res?.ok) {
-        setScrobbleStatus('Last.fm credentials configured successfully!');
+        pushToast('Настройки Last.fm & ListenBrainz сохранены', 'success');
       } else {
-        setScrobbleStatus('Failed to configure Last.fm.');
+        pushToast('Параметры сохранены локально', 'info');
       }
     } catch {
-      setScrobbleStatus('Error configuring Last.fm credentials.');
+      pushToast('Ошибка сохранения Last.fm', 'error');
+    }
+  };
+
+  const handleToggleSbCategory = (catId: string) => {
+    const exists = sponsorBlockCategories.includes(catId);
+    const next = exists
+      ? sponsorBlockCategories.filter((c) => c !== catId)
+      : [...sponsorBlockCategories, catId];
+    setDspOption({ sponsorBlockCategories: next });
+  };
+
+  const handleExportBackup = async () => {
+    const res = await window.electronAPI?.db?.exportBackup();
+    if (res?.ok) pushToast(`Бэкап сохранён: ${res.filePath}`, 'success');
+    else pushToast('Экспорт отменён', 'info');
+  };
+
+  const handleImportBackup = async () => {
+    const res = await window.electronAPI?.db?.importBackup();
+    if (res?.state) {
+      pushToast('Бэкап восстановлен! Перезагрузите окно для применения.', 'success');
     }
   };
 
   return (
-    <div className="p-6 max-w-4xl space-y-8 pb-20">
-      <div>
-        <h1 className="text-2xl font-bold text-on-surface mb-1">Settings</h1>
-        <p className="text-sm text-on-surface-variant">Customize your ArchiveTune experience on Linux.</p>
+    <div className="p-6 max-w-5xl space-y-6 pb-28">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-2xl font-black text-on-surface mb-1">
+            Расширенные Настройки — ArchiveTune V2 Release
+          </h1>
+          <p className="text-xs text-on-surface-variant">
+            Полный контроль над каждым модулем: Мульти-Сорс, Авто-Синхронизация, 10-Band EQ, Dual-Deck DSP, Визуал и Система
+          </p>
+        </div>
+        <button
+          onClick={() => void syncAllPlatforms(true)}
+          disabled={syncingAll}
+          className="px-4 py-2 rounded-xl bg-primary text-on-primary text-xs font-bold shadow-md hover:opacity-90 disabled:opacity-50"
+        >
+          {syncingAll ? 'Синхронизация платформ…' : 'Синхронизировать Spotify + YTM + SC'}
+        </button>
       </div>
 
-      {/* Theme & Material You */}
+      {/* Category Filter Tabs */}
+      <div className="flex items-center gap-1.5 flex-wrap bg-surface-container p-1.5 rounded-2xl border border-outline-variant/25">
+        {[
+          { id: 'all', label: 'Все настройки' },
+          { id: 'sources', label: 'Мульти-Сорс & Синхронизация' },
+          { id: 'audio', label: 'Аудио, DSP & 10-Band EQ' },
+          { id: 'ui', label: 'Интерфейс & 8 Стилей' },
+          { id: 'lyrics', label: 'Тексты, Canvas & SponsorBlock' },
+          { id: 'system', label: 'Система, Хоткеи & Бэкап' },
+        ].map((cat) => (
+          <button
+            key={cat.id}
+            onClick={() => setSettingsCategory(cat.id as any)}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition ${
+              settingsCategory === cat.id
+                ? 'bg-primary text-on-primary shadow-sm'
+                : 'text-on-surface-variant hover:text-on-surface'
+            }`}
+          >
+            {cat.label}
+          </button>
+        ))}
+      </div>
+
+      {/* 1. Theme, UI Scale, Visualizer & Player Styles */}
+      {(settingsCategory === 'all' || settingsCategory === 'ui') && (
       <section className="bg-surface-container rounded-2xl p-5 space-y-5 border border-outline-variant/30">
         <div className="flex items-center gap-3">
           <Palette className="text-primary" size={22} />
           <div>
-            <h2 className="text-base font-semibold text-on-surface">Material You Dynamic Theming</h2>
-            <p className="text-xs text-on-surface-variant">Choose your accent palette and appearance mode</p>
+            <h2 className="text-base font-bold text-on-surface">
+              Тема Material You, Стили плеера &amp; Визуализатор
+            </h2>
+            <p className="text-xs text-on-surface-variant">
+              Адаптивные цвета из обложек, масштаб интерфейса и 8 макетов Now Playing
+            </p>
           </div>
         </div>
 
-        <div>
-          <label className="text-xs font-medium text-on-surface-variant mb-2 block">Theme Mode</label>
-          <div className="flex gap-2">
-            {(['dark', 'amoled', 'light'] as const).map((mode) => (
-              <button
-                key={mode}
-                onClick={() => setTheme(mode)}
-                className={`px-4 py-2 rounded-xl text-sm font-medium capitalize transition-all ${
-                  theme === mode
-                    ? 'bg-primary text-on-primary shadow'
-                    : 'bg-surface-container-high text-on-surface hover:bg-surface-container-highest'
-                }`}
-              >
-                {mode}
-              </button>
-            ))}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="text-xs font-semibold text-on-surface-variant mb-2 block">Режим темы</label>
+            <div className="flex gap-2">
+              {(['dark', 'amoled', 'light'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  onClick={() => setTheme(mode)}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold capitalize transition-all ${
+                    theme === mode
+                      ? 'bg-primary text-on-primary shadow'
+                      : 'bg-surface-container-high text-on-surface hover:bg-surface-container-highest'
+                  }`}
+                >
+                  {mode}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-semibold text-on-surface-variant">Масштаб UI</label>
+              <span className="text-xs font-bold text-primary tabular-nums">{Math.round(uiScale * 100)}%</span>
+            </div>
+            <input
+              type="range"
+              min={0.85}
+              max={1.25}
+              step={0.05}
+              value={uiScale}
+              onChange={(e) => setUiScale(parseFloat(e.target.value))}
+              className="w-full accent-primary cursor-pointer"
+            />
           </div>
         </div>
 
+        <div className="flex items-center justify-between p-3 rounded-xl bg-surface-container-high">
+          <div>
+            <span className="text-sm font-semibold text-on-surface">Динамическая палитра из обложки</span>
+            <p className="text-xs text-on-surface-variant">Авто-извлечение акцента M3 для активного трека</p>
+          </div>
+          <button
+            onClick={() => setDynamicColorFromArt(!dynamicColorFromArt)}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold ${
+              dynamicColorFromArt ? 'bg-primary text-on-primary' : 'bg-surface-container-highest text-on-surface-variant'
+            }`}
+          >
+            {dynamicColorFromArt ? 'Вкл' : 'Вручную'}
+          </button>
+        </div>
+
         <div>
-          <label className="text-xs font-medium text-on-surface-variant mb-2 block">Seed Accent Color</label>
+          <label className="text-xs font-semibold text-on-surface-variant mb-2 block">Базовый цвет</label>
           <div className="flex flex-wrap gap-3">
             {SEED_COLORS.map((c) => (
               <button
                 key={c.hex}
                 onClick={() => setSeedColor(c.hex)}
-                className={`w-9 h-9 rounded-full transition-transform flex items-center justify-center ${
+                className={`w-8 h-8 rounded-full transition-transform ${
                   seedColor === c.hex ? 'scale-110 ring-2 ring-primary ring-offset-2 ring-offset-surface' : 'hover:scale-105'
                 }`}
                 style={{ backgroundColor: c.hex }}
@@ -109,256 +399,750 @@ export default function SettingsPage() {
             ))}
           </div>
         </div>
-      </section>
 
-      {/* Audio Playback & Enhancement (Mobile ArchiveTune Features) */}
-      <section className="bg-surface-container rounded-2xl p-5 space-y-5 border border-outline-variant/30">
-        <div className="flex items-center gap-3">
-          <Sliders className="text-primary" size={22} />
-          <div>
-            <h2 className="text-base font-semibold text-on-surface">Playback & Audio Enhancements</h2>
-            <p className="text-xs text-on-surface-variant">Features ported directly from ArchiveTune Mobile</p>
+        {/* Audio Visualizer */}
+        <div className="flex items-center justify-between flex-wrap gap-3 p-3 rounded-xl bg-surface-container-high">
+          <div className="flex items-center gap-2.5">
+            <Activity size={18} className="text-primary" />
+            <div>
+              <span className="text-sm font-semibold text-on-surface">Аудио-визуализатор</span>
+              <p className="text-xs text-on-surface-variant">Отображение спектра в полноэкранном плеере</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {(['bars', 'wave', 'circular'] as const).map((st) => (
+              <button
+                key={st}
+                onClick={() => setVisualizer(true, st)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold capitalize ${
+                  visualizerEnabled && visualizerStyle === st
+                    ? 'bg-primary text-on-primary'
+                    : 'bg-surface-container text-on-surface-variant'
+                }`}
+              >
+                {st}
+              </button>
+            ))}
+            <button
+              onClick={() => setVisualizer(!visualizerEnabled)}
+              className={`px-3 py-1 rounded-lg text-[11px] font-bold ${
+                visualizerEnabled ? 'bg-emerald-500/20 text-emerald-400' : 'bg-surface-container text-on-surface-variant'
+              }`}
+            >
+              {visualizerEnabled ? 'Вкл' : 'Выкл'}
+            </button>
           </div>
         </div>
 
-        <div className="space-y-4">
-          {/* Volume Normalization */}
-          <div className="flex items-center justify-between p-3 rounded-xl bg-surface-container-high">
-            <div className="space-y-0.5">
-              <div className="flex items-center gap-2">
-                <Sparkles size={16} className="text-primary" />
-                <span className="text-sm font-medium text-on-surface">Volume Normalization (Dynamic Audio Normalizer)</span>
-              </div>
-              <p className="text-xs text-on-surface-variant">
-                Automatically adjusts loudness between quiet and loud tracks for consistent volume without clipping.
-              </p>
-            </div>
-            <button
-              onClick={toggleNormalization}
-              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                normalization ? 'bg-primary' : 'bg-surface-container-highest'
-              }`}
-            >
-              <span
-                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                  normalization ? 'translate-x-6' : 'translate-x-1'
-                }`}
-              />
-            </button>
+        {/* 8 Player Styles */}
+        <div>
+          <label className="text-xs font-semibold text-on-surface-variant mb-2 block">Стиль экрана Now Playing</label>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            {PLAYER_STYLES.map((st) => {
+              const active = playerStyle === st.id;
+              return (
+                <button
+                  key={st.id}
+                  onClick={() => setPlayerStyle(st.id)}
+                  className={`text-left p-3 rounded-xl border transition-all ${
+                    active
+                      ? 'bg-primary/15 border-primary text-on-surface'
+                      : 'bg-surface-container-high border-transparent text-on-surface-variant hover:text-on-surface'
+                  }`}
+                >
+                  <p className="text-xs font-bold text-on-surface">{st.name}</p>
+                  <p className="text-[11px] text-on-surface-variant mt-0.5">{st.desc}</p>
+                </button>
+              );
+            })}
           </div>
+        </div>
 
-          {/* Crossfade */}
+        {/* Extra UI Module Toggles (Fooyin / Amberol / Tauon inspired) */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-2">
+          <button
+            onClick={() => updateExtSetting({ ambientBackgroundBlur: !extSettings.ambientBackgroundBlur })}
+            className="flex items-center justify-between p-3 rounded-xl bg-surface-container-high text-left"
+          >
+            <div>
+              <p className="text-xs font-bold text-on-surface">Амбиент-размытие фона (Ambient Blur)</p>
+              <p className="text-[11px] text-on-surface-variant">Динамическая подсветка из обложки на фоне</p>
+            </div>
+            <span className={`px-2.5 py-1 rounded-lg text-[11px] font-bold ${extSettings.ambientBackgroundBlur ? 'bg-primary text-on-primary' : 'bg-surface-container-highest text-on-surface-variant'}`}>
+              {extSettings.ambientBackgroundBlur ? 'Вкл' : 'Выкл'}
+            </span>
+          </button>
+          <button
+            onClick={() => updateExtSetting({ compactTrackRows: !extSettings.compactTrackRows })}
+            className="flex items-center justify-between p-3 rounded-xl bg-surface-container-high text-left"
+          >
+            <div>
+              <p className="text-xs font-bold text-on-surface">Компактные строки списков (Fooyin Mode)</p>
+              <p className="text-[11px] text-on-surface-variant">Уменьшенные отступы для больших медиатек</p>
+            </div>
+            <span className={`px-2.5 py-1 rounded-lg text-[11px] font-bold ${extSettings.compactTrackRows ? 'bg-primary text-on-primary' : 'bg-surface-container-highest text-on-surface-variant'}`}>
+              {extSettings.compactTrackRows ? 'Вкл' : 'Выкл'}
+            </span>
+          </button>
+        </div>
+      </section>
+      )}
+
+      {/* 2. Audio Engine, Output Device, AutoMix & DSP */}
+      {(settingsCategory === 'all' || settingsCategory === 'audio') && (
+      <section className="bg-surface-container rounded-2xl p-5 space-y-5 border border-outline-variant/30">
+        <div className="flex items-center gap-3">
+          <Volume2 className="text-primary" size={22} />
+          <div>
+            <h2 className="text-base font-bold text-on-surface">
+              Аудио-движок mpv, Dual-Deck AutoMix &amp; DSP
+            </h2>
+            <p className="text-xs text-on-surface-variant">
+              Устройство вывода ALSA/Pulse/PipeWire, кроссфейд, питч, бас-буст и экспандер громкости
+            </p>
+          </div>
+        </div>
+
+        {/* Audio output device selector */}
+        <div>
+          <label className="text-xs font-semibold text-on-surface-variant mb-2 block">
+            Устройство вывода звука (Output Device)
+          </label>
+          <select
+            value={audioDevice || 'auto'}
+            onChange={(e) => void handleAudioDeviceChange(e.target.value)}
+            className="w-full bg-surface-container-high border border-outline-variant/30 rounded-xl px-3.5 py-2.5 text-xs font-semibold text-on-surface outline-none"
+          >
+            <option value="auto">По умолчанию (Auto PipeWire / PulseAudio)</option>
+            {audioDevices.map((dev) => (
+              <option key={dev.id} value={dev.id}>
+                {dev.description || dev.id}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Automix Mode selector */}
+        <div>
+          <label className="text-xs font-semibold text-on-surface-variant mb-2 block">Режим перехода AutoMix</label>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+            {AUTOMIX_MODES.map((m) => (
+              <button
+                key={m.id}
+                onClick={() => setAutomixMode(m.id)}
+                className={`p-2.5 rounded-xl text-left border transition-all ${
+                  automixMode === m.id
+                    ? 'bg-primary/15 border-primary'
+                    : 'bg-surface-container-high border-transparent hover:border-outline-variant/40'
+                }`}
+              >
+                <p className="text-xs font-bold text-on-surface">{m.label}</p>
+                <p className="text-[10px] text-on-surface-variant mt-0.5">{m.desc}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Sliders */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="p-3 rounded-xl bg-surface-container-high space-y-2">
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <div className="flex items-center gap-2">
-                  <Clock size={16} className="text-primary" />
-                  <span className="text-sm font-medium text-on-surface">Audio Crossfade</span>
-                </div>
-                <p className="text-xs text-on-surface-variant">Fade seamlessly into the next track</p>
-              </div>
-              <span className="text-sm font-bold text-primary tabular-nums">
-                {crossfade === 0 ? 'Off' : `${crossfade}s`}
-              </span>
+            <div className="flex justify-between text-xs font-bold">
+              <span>Кроссфейд (Crossfade)</span>
+              <span className="text-primary">{crossfade} сек</span>
             </div>
             <input
               type="range"
               min={0}
-              max={20}
+              max={12}
               step={1}
               value={crossfade}
-              onChange={(e) => setCrossfade(parseInt(e.target.value, 10))}
+              onChange={(e) => setCrossfade(Number(e.target.value))}
               className="w-full accent-primary cursor-pointer"
             />
-            <div className="flex justify-between text-[11px] text-on-surface-variant">
-              <span>0s (Off)</span>
-              <span>10s</span>
-              <span>20s (Max)</span>
-            </div>
           </div>
 
-          {/* Lyrics Sync Default Offset */}
           <div className="p-3 rounded-xl bg-surface-container-high space-y-2">
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <span className="text-sm font-medium text-on-surface">Global Lyrics Sync Offset</span>
-                <p className="text-xs text-on-surface-variant">Shift lyrics timing earlier (-) or later (+)</p>
-              </div>
-              <span className="text-sm font-bold text-primary tabular-nums">
-                {lyricsOffset > 0 ? `+${lyricsOffset}ms` : `${lyricsOffset}ms`}
-              </span>
+            <div className="flex justify-between text-xs font-bold">
+              <span>Скорость (Tempo / Speed)</span>
+              <span className="text-primary">{speed.toFixed(2)}x</span>
             </div>
-            <div className="flex items-center gap-3">
-              <input
-                type="range"
-                min={-3000}
-                max={3000}
-                step={100}
-                value={lyricsOffset}
-                onChange={(e) => setLyricsOffset(parseInt(e.target.value, 10))}
-                className="w-full accent-primary cursor-pointer"
-              />
-              <button
-                onClick={() => setLyricsOffset(0)}
-                className="px-3 py-1 rounded-lg bg-surface-container-highest text-xs font-semibold text-on-surface hover:text-primary transition-colors shrink-0"
+            <input
+              type="range"
+              min={0.5}
+              max={2.0}
+              step={0.05}
+              value={speed}
+              onChange={(e) => void changeSpeed(Number(e.target.value))}
+              className="w-full accent-primary cursor-pointer"
+            />
+          </div>
+
+          <div className="p-3 rounded-xl bg-surface-container-high space-y-2">
+            <div className="flex justify-between text-xs font-bold">
+              <span>Сдвиг тона (Pitch Shift)</span>
+              <span className="text-primary">{pitchSemitones > 0 ? `+${pitchSemitones}` : pitchSemitones} st</span>
+            </div>
+            <input
+              type="range"
+              min={-6}
+              max={6}
+              step={1}
+              value={pitchSemitones}
+              onChange={(e) => setDspOption({ pitchSemitones: Number(e.target.value) })}
+              className="w-full accent-primary cursor-pointer"
+            />
+          </div>
+
+          <div className="p-3 rounded-xl bg-surface-container-high space-y-2">
+            <div className="flex justify-between text-xs font-bold">
+              <span>Bass Boost (+60Hz)</span>
+              <span className="text-primary">+{bassBoost} dB</span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={12}
+              step={1}
+              value={bassBoost}
+              onChange={(e) => setDspOption({ bassBoost: Number(e.target.value) })}
+              className="w-full accent-primary cursor-pointer"
+            />
+          </div>
+
+          <div className="p-3 rounded-xl bg-surface-container-high space-y-2 sm:col-span-2">
+            <div className="flex justify-between text-xs font-bold">
+              <span>Stereo Widener (Пространственная сцена)</span>
+              <span className="text-primary">{Math.round(stereoWidener * 100)}%</span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.1}
+              value={stereoWidener}
+              onChange={(e) => setDspOption({ stereoWidener: Number(e.target.value) })}
+              className="w-full accent-primary cursor-pointer"
+            />
+          </div>
+        </div>
+
+        {/* Boolean DSP switches */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          {[
+            { label: 'Smart DJ Automix', desc: 'Умный подбор переходов', val: smartDjAutomix, fn: () => setSmartDjAutomix(!smartDjAutomix) },
+            { label: 'Gapless внутри альбома', desc: 'Бесшовное переключение', val: gaplessAlbum, fn: () => setGaplessAlbum(!gaplessAlbum) },
+            { label: 'Нормализация (dynaudnorm)', desc: 'Выравнивание громкости', val: normalization, fn: () => void toggleNormalization(!normalization) },
+            { label: 'Аудио-компрессор', desc: 'Мягкий лимитер пиков', val: audioCompressor, fn: () => setDspOption({ audioCompressor: !audioCompressor }) },
+            { label: 'Логарифмическая громкость (Exp Volume)', desc: 'Естественная кривая громкости (x^1.65)', val: exponentialVolume, fn: () => setDspOption({ exponentialVolume: !exponentialVolume }) },
+            { label: 'Пропуск тишины (Skip Silence)', desc: 'Обрезка тихих пауз в начале и конце', val: silenceSkip, fn: () => setDspOption({ silenceSkip: !silenceSkip }) },
+            { label: 'Авто-радио после конца очереди', desc: 'Бесконечный автоплей похожих треков', val: extSettings.autoRadioOnQueueEnd, fn: () => updateExtSetting({ autoRadioOnQueueEnd: !extSettings.autoRadioOnQueueEnd }) },
+            { label: 'Предзагрузка трека (Deck B Prebuffer)', desc: 'Мгновенный старт следующего трека в памяти', val: extSettings.prebufferNextTrack, fn: () => updateExtSetting({ prebufferNextTrack: !extSettings.prebufferNextTrack }) },
+          ].map((item) => (
+            <button
+              key={item.label}
+              onClick={item.fn}
+              className="flex items-center justify-between p-3 rounded-xl bg-surface-container-high text-left"
+            >
+              <div>
+                <p className="text-xs font-bold text-on-surface">{item.label}</p>
+                <p className="text-[11px] text-on-surface-variant">{item.desc}</p>
+              </div>
+              <span
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold ${
+                  item.val ? 'bg-primary text-on-primary' : 'bg-surface-container-highest text-on-surface-variant'
+                }`}
               >
-                Reset
+                {item.val ? 'Вкл' : 'Выкл'}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {/* 10-Band Parametric Equalizer directly in Settings */}
+        <div className="p-4 rounded-2xl bg-surface-container-high space-y-4 border border-outline-variant/20">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-3">
+              <Sliders size={18} className="text-primary" />
+              <span className="text-sm font-bold text-on-surface">10-полосный параметрический эквалайзер</span>
+              <button
+                onClick={() => setEqualizerState(!eqEnabled, eqBands, eqPreset)}
+                className={`px-3 py-1 rounded-lg text-xs font-bold ${
+                  eqEnabled ? 'bg-primary text-on-primary' : 'bg-surface-container-highest text-on-surface-variant'
+                }`}
+              >
+                {eqEnabled ? 'ВКЛ' : 'ВЫКЛ (BYPASS)'}
               </button>
             </div>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {Object.keys(EQ_PRESET_MAP).map((presetName) => (
+                <button
+                  key={presetName}
+                  onClick={() => setEqualizerState(true, EQ_PRESET_MAP[presetName], presetName)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors ${
+                    eqPreset === presetName && eqEnabled
+                      ? 'bg-primary text-on-primary'
+                      : 'bg-surface-container text-on-surface-variant hover:text-on-surface'
+                  }`}
+                >
+                  {presetName}
+                </button>
+              ))}
+            </div>
           </div>
 
-          {/* Offline Downloads Folder */}
-          <div className="flex items-center justify-between p-3 rounded-xl bg-surface-container-high">
-            <div className="flex items-center gap-3">
-              <FolderDown size={18} className="text-primary" />
-              <div>
-                <span className="text-sm font-medium text-on-surface">Music Download Location</span>
-                <p className="text-xs text-on-surface-variant">Downloaded tracks are saved to ~/Music in 320kbps MP3 / Opus</p>
-              </div>
-            </div>
-            <span className="text-xs font-mono bg-surface-container-highest px-3 py-1.5 rounded-lg text-on-surface">
-              ~/Music
-            </span>
+          <div className="grid grid-cols-5 sm:grid-cols-10 gap-2 pt-2">
+            {EQ_LABELS.map((label, idx) => {
+              const val = eqBands[idx] ?? 0;
+              return (
+                <div key={label} className="flex flex-col items-center bg-surface-container p-2 rounded-xl gap-1.5">
+                  <span className="text-[10px] font-bold text-primary tabular-nums">
+                    {val > 0 ? `+${val}` : val}dB
+                  </span>
+                  <input
+                    type="range"
+                    min={-12}
+                    max={12}
+                    step={0.5}
+                    value={val}
+                    onChange={(e) => {
+                      const nextBands = [...eqBands];
+                      nextBands[idx] = parseFloat(e.target.value);
+                      setEqualizerState(true, nextBands, 'Custom');
+                    }}
+                    className="w-full accent-primary cursor-pointer"
+                  />
+                  <span className="text-[10px] text-on-surface-variant font-semibold">{label}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
       </section>
+      )}
 
-      {/* Audio Engine Backend Details */}
+      {/* 3. Multi-Source & Smart Routing + Unified Library Sync */}
+      {(settingsCategory === 'all' || settingsCategory === 'sources') && (
+      <section className="bg-surface-container rounded-2xl p-5 space-y-4 border border-outline-variant/30">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-3">
+            <Radio className="text-primary" size={22} />
+            <div>
+              <h2 className="text-base font-bold text-on-surface">Источники звука &amp; Smart Routing</h2>
+              <p className="text-xs text-on-surface-variant">Приоритет платформ и уведомления автопереключения</p>
+            </div>
+          </div>
+          <button
+            onClick={() => navigate('/integrations')}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-primary text-on-primary text-xs font-bold"
+          >
+            <PlugZap size={14} /> Интеграции &amp; Зеркала
+          </button>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {(
+            [
+              { id: 'auto', label: 'Auto Smart Matrix' },
+              { id: 'tidal', label: 'Tidal FLAC' },
+              { id: 'qobuz', label: 'Qobuz Hi-Res' },
+              { id: 'youtube', label: 'YouTube Music' },
+              { id: 'deezer', label: 'Deezer' },
+              { id: 'jiosaavn', label: 'JioSaavn' },
+              { id: 'soundcloud', label: 'SoundCloud' },
+            ] as Array<{ id: 'auto' | AudioSourceId; label: string }>
+          ).map((src) => (
+            <button
+              key={src.id}
+              onClick={() => setPreferredAudioSource(src.id)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold ${
+                preferredAudioSource === src.id
+                  ? 'bg-primary text-on-primary'
+                  : 'bg-surface-container-high text-on-surface-variant hover:text-on-surface'
+              }`}
+            >
+              {src.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          {[
+            { label: 'Умный авто-выбор лучшего источника (Smart Auto-Switch)', desc: 'Авто-переключение на FLAC/Hi-Res при высоком совпадении', val: autoUpgradeLossless, fn: () => setAutoUpgradeLossless(!autoUpgradeLossless) },
+            { label: 'Приоритет Lossless над 100% совпадением', desc: 'Выбирать FLAC даже если lossy-источник ближе на 1-2%', val: extSettings.preferLosslessOverExact, fn: () => updateExtSetting({ preferLosslessOverExact: !extSettings.preferLosslessOverExact }) },
+            { label: 'Universal Fallback (Резервный поиск)', desc: 'Авто-переход на рабочее зеркало при ошибке потока', val: universalFallback, fn: () => setUniversalFallback(!universalFallback) },
+            {
+              label: 'Smart Switch уведомления (Тосты)',
+              desc: 'Показывать всплывающий бейдж при смене источника',
+              val: showSmartSwitchToasts,
+              fn: () => setDesktopSetting({ showSmartSwitchToasts: !showSmartSwitchToasts }),
+            },
+          ].map((b) => (
+            <button
+              key={b.label}
+              onClick={b.fn}
+              className="flex items-center justify-between p-3 rounded-xl bg-surface-container-high text-left"
+            >
+              <div>
+                <p className="text-xs font-bold text-on-surface">{b.label}</p>
+                <p className="text-[11px] text-on-surface-variant">{b.desc}</p>
+              </div>
+              <span className={`px-2.5 py-1 rounded-lg text-[11px] font-bold ${b.val ? 'bg-primary text-on-primary' : 'bg-surface-container-highest text-on-surface-variant'}`}>
+                {b.val ? 'Вкл' : 'Выкл'}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {/* Smart Auto-Switch Match Threshold Slider */}
+        <div className="p-3.5 rounded-xl bg-surface-container-high space-y-2">
+          <div className="flex justify-between text-xs font-bold">
+            <span>Порог схожести трека для авто-переключения (Smart Match Threshold)</span>
+            <span className="text-primary">{extSettings.autoSwitchThreshold}% совпадение</span>
+          </div>
+          <input
+            type="range"
+            min={70}
+            max={98}
+            step={1}
+            value={extSettings.autoSwitchThreshold}
+            onChange={(e) => updateExtSetting({ autoSwitchThreshold: Number(e.target.value) })}
+            className="w-full accent-primary cursor-pointer"
+          />
+          <p className="text-[11px] text-on-surface-variant">
+            Если найденный на Tidal / Qobuz / Deezer трек совпадает по названию, артисту и длительности минимум на {extSettings.autoSwitchThreshold}%, плеер сам переключится на него.
+          </p>
+        </div>
+
+        {/* Enable / Disable Individual Audio Providers */}
+        <div className="space-y-2">
+          <label className="text-xs font-bold text-on-surface-variant block">
+            Включённые аудио-провайдеры (можно отключить любой источник):
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {(['tidal', 'qobuz', 'deezer', 'youtube', 'soundcloud', 'jiosaavn', 'apple', 'spotify'] as AudioSourceId[]).map((src) => {
+              const active = enabledSources?.[src] !== false;
+              return (
+                <button
+                  key={src}
+                  onClick={() => toggleSourceEnabled(src, !active)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition ${
+                    active
+                      ? 'bg-emerald-500/15 text-emerald-300 border-emerald-400/40'
+                      : 'bg-surface-container-high text-on-surface-variant border-transparent opacity-60'
+                  }`}
+                >
+                  {src.toUpperCase()}: {active ? 'ВКЛ' : 'ВЫКЛ'}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Unified Library Sync Toggles */}
+        <div className="pt-2 border-t border-outline-variant/20 space-y-2.5">
+          <p className="text-xs font-bold text-on-surface">
+            Общая медиатека (авто-объединение Любимых треков и Плейлистов со всех платформ):
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            {[
+              { label: 'Синхр. Spotify', val: extSettings.autoSyncSpotify, fn: () => updateExtSetting({ autoSyncSpotify: !extSettings.autoSyncSpotify }) },
+              { label: 'Синхр. YouTube Music', val: extSettings.autoSyncYtm, fn: () => updateExtSetting({ autoSyncYtm: !extSettings.autoSyncYtm }) },
+              { label: 'Синхр. SoundCloud', val: extSettings.autoSyncSc, fn: () => updateExtSetting({ autoSyncSc: !extSettings.autoSyncSc }) },
+            ].map((s) => (
+              <button
+                key={s.label}
+                onClick={s.fn}
+                className="flex items-center justify-between p-3 rounded-xl bg-surface-container-high text-xs font-bold"
+              >
+                <span className="text-on-surface">{s.label}</span>
+                <span className={s.val ? 'text-emerald-400' : 'text-on-surface-variant'}>
+                  {s.val ? 'Вкл' : 'Выкл'}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+      )}
+
+      {/* 4. Lyrics, Canvas & AI Content Filter */}
+      {(settingsCategory === 'all' || settingsCategory === 'lyrics') && (
       <section className="bg-surface-container rounded-2xl p-5 space-y-4 border border-outline-variant/30">
         <div className="flex items-center gap-3">
-          <Disc3 className="text-primary" size={22} />
+          <Sparkles className="text-primary" size={22} />
           <div>
-            <h2 className="text-base font-semibold text-on-surface">Audio Engine Architecture</h2>
-            <p className="text-xs text-on-surface-variant">Configured for low-latency native Linux playback</p>
+            <h2 className="text-base font-bold text-on-surface">Тексты песен, Canvas &amp; AI-фильтр</h2>
+            <p className="text-xs text-on-surface-variant">Караоке по словам, транслитерация, сдвиг тайминга и фильтр AI-контента</p>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-          <div className="p-3 rounded-xl bg-surface-container-high flex flex-col gap-1">
-            <span className="text-xs text-on-surface-variant">Backend Engine</span>
-            <span className="font-medium text-on-surface">mpv (Bidirectional JSON IPC Socket)</span>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          {[
+            { label: 'Word-by-Word караоке', val: lyricsWordByWord, fn: () => setLyricsSettings({ lyricsWordByWord: !lyricsWordByWord }) },
+            { label: 'Транслитерация (Ромадзи/Romaja)', val: lyricsRomanize, fn: () => setLyricsSettings({ lyricsRomanize: !lyricsRomanize }) },
+            { label: 'Авто-перевод текста', val: lyricsTranslate, fn: () => setLyricsSettings({ lyricsTranslate: !lyricsTranslate }) },
+            { label: 'Motion Canvas / Видеофоны', val: canvasEnabled, fn: () => setCanvasEnabled(!canvasEnabled) },
+            { label: 'Скрывать AI-генерацию', val: aiContentFilter, fn: () => setDspOption({ aiContentFilter: !aiContentFilter }) },
+          ].map((it) => (
+            <button
+              key={it.label}
+              onClick={it.fn}
+              className="flex items-center justify-between p-3 rounded-xl bg-surface-container-high text-xs font-bold"
+            >
+              <span className="text-on-surface">{it.label}</span>
+              <span className={`px-2.5 py-1 rounded-lg ${it.val ? 'bg-primary text-on-primary' : 'bg-surface-container-highest text-on-surface-variant'}`}>
+                {it.val ? 'Вкл' : 'Выкл'}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="p-3 rounded-xl bg-surface-container-high space-y-1">
+            <label className="text-[11px] font-bold text-on-surface-variant">Размер шрифта текста</label>
+            <div className="flex gap-1.5 pt-1">
+              {(['small', 'medium', 'large'] as const).map((sz) => (
+                <button
+                  key={sz}
+                  onClick={() => setLyricsSettings({ lyricsFontSize: sz })}
+                  className={`flex-1 py-1 rounded-lg text-[11px] font-bold uppercase ${
+                    lyricsFontSize === sz ? 'bg-primary text-on-primary' : 'bg-surface-container text-on-surface-variant'
+                  }`}
+                >
+                  {sz}
+                </button>
+              ))}
+            </div>
           </div>
-          <div className="p-3 rounded-xl bg-surface-container-high flex flex-col gap-1">
-            <span className="text-xs text-on-surface-variant">Stream Resolver</span>
-            <span className="font-medium text-on-surface">yt-dlp (Opus / WebM 160kbps+)</span>
+
+          <div className="p-3 rounded-xl bg-surface-container-high space-y-1">
+            <label className="text-[11px] font-bold text-on-surface-variant">Язык перевода</label>
+            <input
+              type="text"
+              value={lyricsTranslateLang}
+              onChange={(e) => setLyricsSettings({ lyricsTranslateLang: e.target.value })}
+              className="w-full bg-surface-container rounded-lg px-2.5 py-1 text-xs text-on-surface outline-none"
+            />
           </div>
-          <div className="p-3 rounded-xl bg-surface-container-high flex flex-col gap-1">
-            <span className="text-xs text-on-surface-variant">Gapless Playback</span>
-            <span className="font-medium text-on-surface">Enabled (--gapless-audio=yes)</span>
-          </div>
-          <div className="p-3 rounded-xl bg-surface-container-high flex flex-col gap-1">
-            <span className="text-xs text-on-surface-variant">Lyrics Engine</span>
-            <span className="font-medium text-on-surface">LRCLib API (Fuzzy & Exact Synced Matching)</span>
+
+          <div className="p-3 rounded-xl bg-surface-container-high space-y-1">
+            <div className="flex justify-between text-[11px] font-bold">
+              <span className="text-on-surface-variant">Синхронизация</span>
+              <span className="text-primary">{lyricsOffset} ms</span>
+            </div>
+            <input
+              type="range"
+              min={-3000}
+              max={3000}
+              step={100}
+              value={lyricsOffset}
+              onChange={(e) => setLyricsSettings({ lyricsOffset: Number(e.target.value) })}
+              className="w-full accent-primary cursor-pointer"
+            />
           </div>
         </div>
       </section>
+      )}
 
-      {/* Spotify Integration */}
+      {/* 5. SponsorBlock */}
+      {(settingsCategory === 'all' || settingsCategory === 'lyrics') && (
       <section className="bg-surface-container rounded-2xl p-5 space-y-4 border border-outline-variant/30">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <ListMusic className="text-[#1DB954]" size={22} />
+            <Shield className="text-primary" size={22} />
             <div>
-              <h2 className="text-base font-semibold text-on-surface">Spotify Integration</h2>
-              <p className="text-xs text-on-surface-variant">Sync your Spotify Liked Songs & Playlists into ArchiveTune</p>
+              <h2 className="text-base font-bold text-on-surface">SponsorBlock (YouTube Music)</h2>
+              <p className="text-xs text-on-surface-variant">Автоматический пропуск интро, рекламы и немузыкальных вставок</p>
             </div>
           </div>
           <button
-            onClick={() => navigate('/spotify')}
-            className="px-4 py-2 rounded-xl bg-[#1DB954] hover:bg-[#1ed760] text-black font-bold text-xs transition-colors shadow"
+            onClick={() => setDspOption({ sponsorBlockEnabled: !sponsorBlockEnabled })}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold ${
+              sponsorBlockEnabled ? 'bg-primary text-on-primary' : 'bg-surface-container-high text-on-surface-variant'
+            }`}
           >
-            Open Spotify Connect
+            {sponsorBlockEnabled ? 'Включено' : 'Отключено'}
           </button>
         </div>
-        <p className="text-xs text-on-surface-variant leading-relaxed">
-          Matches ArchiveTune's SpotifyCore resolver — streams Spotify music via high-fidelity YouTube Music audio streams with synced lyrics.
-        </p>
-      </section>
 
-      {/* Last.fm Scrobbler */}
-      <section className="bg-surface-container rounded-2xl p-5 space-y-4 border border-outline-variant/30">
+        <div className="flex flex-wrap gap-2">
+          {SPONSORBLOCK_CATEGORIES.map((cat) => {
+            const active = sponsorBlockCategories.includes(cat.id);
+            return (
+              <button
+                key={cat.id}
+                onClick={() => handleToggleSbCategory(cat.id)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold ${
+                  active ? 'bg-primary/20 text-primary border border-primary/40' : 'bg-surface-container-high text-on-surface-variant'
+                }`}
+              >
+                {active && <Check size={12} />}
+                {cat.label}
+              </button>
+            );
+          })}
+        </div>
+      </section>
+      )}
+
+      {/* 6. Desktop, Local HTTP API & Scrobbling */}
+      {(settingsCategory === 'all' || settingsCategory === 'system') && (
+      <section className="bg-surface-container rounded-2xl p-5 space-y-5 border border-outline-variant/30">
         <div className="flex items-center gap-3">
-          <Radio className="text-primary" size={22} />
+          <Monitor className="text-primary" size={22} />
           <div>
-            <h2 className="text-base font-semibold text-on-surface">Last.fm Scrobbler</h2>
-            <p className="text-xs text-on-surface-variant">Scrobble played tracks and send live Now Playing status</p>
+            <h2 className="text-base font-bold text-on-surface">Десктоп, Local HTTP API &amp; Скробблинг</h2>
+            <p className="text-xs text-on-surface-variant">Системный трей, MPRIS2, Discord RPC, локальный сервер :26538, Last.fm и ListenBrainz</p>
           </div>
         </div>
 
-        <form onSubmit={handleSaveScrobble} className="space-y-3">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div>
-              <label className="text-xs text-on-surface-variant block mb-1">API Key</label>
-              <input
-                type="text"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="Last.fm API Key"
-                className="w-full px-3 py-2 text-sm rounded-xl bg-surface-container-high text-on-surface border border-outline-variant/20 focus:outline-none focus:ring-1 focus:ring-primary"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-on-surface-variant block mb-1">API Secret</label>
-              <input
-                type="password"
-                value={apiSecret}
-                onChange={(e) => setApiSecret(e.target.value)}
-                placeholder="Shared Secret"
-                className="w-full px-3 py-2 text-sm rounded-xl bg-surface-container-high text-on-surface border border-outline-variant/20 focus:outline-none focus:ring-1 focus:ring-primary"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-on-surface-variant block mb-1">Session Key</label>
-              <input
-                type="password"
-                value={sessionKey}
-                onChange={(e) => setSessionKey(e.target.value)}
-                placeholder="Session Key"
-                className="w-full px-3 py-2 text-sm rounded-xl bg-surface-container-high text-on-surface border border-outline-variant/20 focus:outline-none focus:ring-1 focus:ring-primary"
-              />
-            </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          {[
+            { label: 'Сворачивать в трей при закрытии', val: closeToTray, fn: () => setDesktopSetting({ closeToTray: !closeToTray }) },
+            { label: 'Linux MPRIS2 медиа-контролы', val: mprisEnabled, fn: () => setDesktopSetting({ mprisEnabled: !mprisEnabled }) },
+            { label: 'Discord Rich Presence', val: discordRpc, fn: () => setDesktopSetting({ discordRpc: !discordRpc }) },
+            { label: 'Local HTTP API (127.0.0.1:26538)', val: localApiEnabled, fn: () => setDesktopSetting({ localApiEnabled: !localApiEnabled }) },
+            { label: 'Аппаратное ускорение GPU (перезапуск)', val: hardwareAcceleration, fn: () => setDesktopSetting({ hardwareAcceleration: !hardwareAcceleration }) },
+            { label: 'ListenBrainz Scrobbling', val: listenBrainzEnabled, fn: () => setDesktopSetting({ listenBrainzEnabled: !listenBrainzEnabled }) },
+          ].map((it) => (
+            <button
+              key={it.label}
+              onClick={it.fn}
+              className="flex items-center justify-between p-3 rounded-xl bg-surface-container-high text-xs font-bold"
+            >
+              <span className="text-on-surface">{it.label}</span>
+              <span className={it.val ? 'text-primary' : 'text-on-surface-variant'}>
+                {it.val ? 'Вкл' : 'Выкл'}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        <form onSubmit={handleSaveScrobble} className="space-y-3 pt-2 border-t border-outline-variant/20">
+          <p className="text-xs font-bold text-on-surface-variant">Last.fm &amp; ListenBrainz API</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <input
+              type="text"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder="Last.fm API Key"
+              className="bg-surface-container-high px-3 py-2 rounded-xl text-xs text-on-surface outline-none"
+            />
+            <input
+              type="password"
+              value={apiSecret}
+              onChange={(e) => setApiSecret(e.target.value)}
+              placeholder="Last.fm API Secret"
+              className="bg-surface-container-high px-3 py-2 rounded-xl text-xs text-on-surface outline-none"
+            />
+            <input
+              type="text"
+              value={sessionKey}
+              onChange={(e) => setSessionKey(e.target.value)}
+              placeholder="Last.fm Session Key"
+              className="bg-surface-container-high px-3 py-2 rounded-xl text-xs text-on-surface outline-none"
+            />
+            <input
+              type="password"
+              value={lbToken}
+              onChange={(e) => setLbToken(e.target.value)}
+              placeholder="ListenBrainz User Token"
+              className="bg-surface-container-high px-3 py-2 rounded-xl text-xs text-on-surface outline-none"
+            />
           </div>
           <button
             type="submit"
-            className="px-4 py-2 rounded-xl bg-primary text-on-primary text-xs font-medium hover:opacity-90 transition-opacity"
+            className="px-4 py-2 rounded-xl bg-primary text-on-primary text-xs font-bold"
           >
-            Save Credentials
+            Сохранить ключи скробблинга
           </button>
-          {scrobbleStatus && (
-            <p className="text-xs text-primary mt-2">{scrobbleStatus}</p>
-          )}
         </form>
       </section>
+      )}
 
-      {/* About */}
-      <section className="bg-surface-container rounded-2xl p-5 space-y-3 border border-outline-variant/30">
+      {/* 7. Downloads & Full Backup / Restore */}
+      {(settingsCategory === 'all' || settingsCategory === 'system') && (
+      <section className="bg-surface-container rounded-2xl p-5 space-y-4 border border-outline-variant/30">
         <div className="flex items-center gap-3">
-          <Info className="text-primary" size={22} />
+          <Download className="text-primary" size={22} />
           <div>
-            <h2 className="text-base font-semibold text-on-surface">About ArchiveTune for Linux</h2>
-            <p className="text-xs text-on-surface-variant">Version 1.0.0 Desktop Port</p>
+            <h2 className="text-base font-bold text-on-surface">Загрузки &amp; Резервная копия (JSON / SQLite)</h2>
+            <p className="text-xs text-on-surface-variant">Формат оффлайн-сохранения и полный бэкап библиотеки</p>
           </div>
         </div>
 
-        <p className="text-sm text-on-surface-variant leading-relaxed">
-          ArchiveTune for Linux is an open-source native desktop audio client replicating the features of ArchiveTune
-          (Material You theming, synced lyrics, local library, YouTube Music streaming via yt-dlp & mpv, Last.fm scrobbling).
-        </p>
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-on-surface-variant">Формат загрузки:</span>
+            {(['flac', 'mp3', 'opus'] as const).map((fmt) => (
+              <button
+                key={fmt}
+                onClick={() => setDesktopSetting({ downloadFormat: fmt })}
+                className={`px-3 py-1 rounded-lg text-xs font-bold uppercase ${
+                  downloadFormat === fmt ? 'bg-primary text-on-primary' : 'bg-surface-container-high text-on-surface-variant'
+                }`}
+              >
+                {fmt}
+              </button>
+            ))}
+          </div>
 
-        <div className="flex gap-4 pt-2">
           <button
-            onClick={() => window.electronAPI?.openExternal('https://github.com/rukamori/ArchiveTune')}
-            className="flex items-center gap-1.5 text-xs text-primary hover:underline"
+            onClick={() => setDesktopSetting({ embedMetadataAndLyrics: !embedMetadataAndLyrics })}
+            className="px-3 py-1.5 rounded-xl bg-surface-container-high text-xs font-bold text-on-surface"
           >
-            Upstream ArchiveTune <ExternalLink size={12} />
-          </button>
-          <button
-            onClick={() => window.electronAPI?.openExternal('https://github.com/hari45wavin/archivetune-linux')}
-            className="flex items-center gap-1.5 text-xs text-primary hover:underline"
-          >
-            Linux Client Repository <ExternalLink size={12} />
+            Вшивать теги и обложку: {embedMetadataAndLyrics ? 'Да' : 'Нет'}
           </button>
         </div>
+
+        <div className="flex items-center gap-3 pt-2">
+          <button
+            onClick={handleExportBackup}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-primary/15 text-primary text-xs font-bold hover:bg-primary/25"
+          >
+            <HardDriveDownload size={14} /> Экспорт бэкапа (.json)
+          </button>
+          <button
+            onClick={handleImportBackup}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-surface-container-high text-on-surface text-xs font-bold hover:bg-surface-container-highest"
+          >
+            Восстановить из бэкапа
+          </button>
+        </div>
+
+        {/* Keyboard Shortcuts Reference */}
+        <div className="pt-3 border-t border-outline-variant/20 space-y-2">
+          <p className="text-xs font-bold text-on-surface">Горячие клавиши плеера:</p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] text-on-surface-variant">
+            <div className="p-2 rounded-lg bg-surface-container-high"><strong className="text-primary">Space</strong> — Пауза / Старт</div>
+            <div className="p-2 rounded-lg bg-surface-container-high"><strong className="text-primary">Esc</strong> — Свернуть плеер / окно</div>
+            <div className="p-2 rounded-lg bg-surface-container-high"><strong className="text-primary">← / →</strong> — Перемотка ±5 сек</div>
+            <div className="p-2 rounded-lg bg-surface-container-high"><strong className="text-primary">J / L</strong> — Перемотка ±10 сек</div>
+            <div className="p-2 rounded-lg bg-surface-container-high"><strong className="text-primary">M</strong> — Mute / Звук</div>
+            <div className="p-2 rounded-lg bg-surface-container-high"><strong className="text-primary">Ctrl+Q</strong> — Очередь</div>
+            <div className="p-2 rounded-lg bg-surface-container-high"><strong className="text-primary">Ctrl+M</strong> — Мини-виджет PiP</div>
+          </div>
+        </div>
+      </section>
+      )}
+
+      {/* About */}
+      <section className="bg-surface-container rounded-2xl p-5 flex items-center justify-between flex-wrap gap-4 border border-outline-variant/30">
+        <div className="flex items-center gap-3">
+          <Info className="text-primary" size={20} />
+          <div>
+            <p className="text-sm font-bold text-on-surface">ArchiveTune Desktop V2.0 RC</p>
+            <p className="text-xs text-on-surface-variant">
+              Вдохновлено S1LOnik/ArchiveTune, Feishin, Pear Desktop и Nuclear
+            </p>
+          </div>
+        </div>
+        <button
+          onClick={() => window.electronAPI?.openExternal('https://github.com/S1LOnik/ArchiveTune')}
+          className="flex items-center gap-1.5 text-xs font-bold text-primary hover:underline"
+        >
+          GitHub <ExternalLink size={12} />
+        </button>
       </section>
     </div>
   );

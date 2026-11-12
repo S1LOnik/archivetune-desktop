@@ -1,24 +1,35 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, globalShortcut } from 'electron';
 import path from 'path';
 import fs from 'fs';
-import { setupPlayerIPC, cleanupMpv } from './player';
+import { setupDatabaseIPC, getDb, saveDbImmediate } from './db';
+import { setupPlayerIPC, playerInstance } from './player';
 import { setupYTMusicIPC } from './ytmusic';
+import { setupProvidersIPC } from './providers';
 import { setupLibraryIPC } from './library';
 import { setupLyricsIPC } from './lyrics';
+import { setupCanvasIPC } from './canvas';
 import { setupScrobbleIPC } from './scrobble';
-import { setupSpotifyIPC } from './spotify';
+import { setupSpotifyIPC, getValidSpotifyTokenOrNull } from './spotify';
+import { setupYouTubeAuthIPC } from './youtubeAuth';
+import { setupSoundCloudAuthIPC } from './soundcloudAuth';
+import { setupTagEditorIPC } from './tagEditor';
+import { desktopIntegration } from './desktop';
+import { setupTogetherIPC, togetherManager } from './together';
+import { setupPlaylistsIoIPC } from './playlists_io';
+import { setupRecognitionIPC } from './recognition';
 
-// Ensure rock-solid stability and instant cold-boot across all Linux drivers (Intel/AMD/Nvidia).
+// Enable smooth Wayland/X11 GPU rendering on Linux (with user fallback setting)
+const initialSettings = getDb().settings;
+app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
 if (process.platform === 'linux') {
-  app.disableHardwareAcceleration();
-  app.commandLine.appendSwitch('disable-gpu');
-  app.commandLine.appendSwitch('disable-software-rasterizer', 'false');
   app.commandLine.appendSwitch('ozone-platform-hint', 'auto');
-  app.commandLine.appendSwitch('enable-features', 'WaylandWindowDecorations');
-  app.commandLine.appendSwitch('disable-gpu-sandbox');
+  app.commandLine.appendSwitch('enable-features', 'WaylandWindowDecorations,VaapiVideoDecodeLinuxGL');
+  if (!initialSettings.hardwareAcceleration) {
+    app.disableHardwareAcceleration();
+    app.commandLine.appendSwitch('disable-gpu');
+  }
 }
 
-// Single instance lock to prevent duplicate conflicting instances
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
   app.quit();
@@ -26,6 +37,7 @@ if (!gotTheLock) {
 }
 
 let mainWindow: BrowserWindow | null = null;
+let isQuitting = false;
 const isDev = process.env.NODE_ENV === 'development';
 
 let cachedIconPath: string | null = null;
@@ -35,7 +47,6 @@ function resolveIconPath(): string {
     path.join(__dirname, '../../assets/icon.png'),
     path.join(process.resourcesPath, 'assets/icon.png'),
     path.join(app.getAppPath(), 'assets/icon.png'),
-    '/home/hariom_joshi/.local/share/icons/hicolor/256x256/apps/archivetune.png',
   ];
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) {
@@ -46,12 +57,12 @@ function resolveIconPath(): string {
   return '';
 }
 
-function createWindow() {
+function createWindow(): void {
   const iconPath = resolveIconPath();
 
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
+    width: 1320,
+    height: 840,
     minWidth: 900,
     minHeight: 600,
     show: true,
@@ -62,12 +73,11 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      webSecurity: false, // Required for streaming audio URLs
+      webSecurity: false, // Required for streaming audio & video canvas URLs
     },
     icon: iconPath || undefined,
   });
 
-  // Fast display: show immediately once ready, or after 150ms max to prevent perceived delay
   let shown = false;
   const showWindow = () => {
     if (!shown && mainWindow && !mainWindow.isDestroyed()) {
@@ -79,11 +89,11 @@ function createWindow() {
   mainWindow.once('ready-to-show', showWindow);
   setTimeout(showWindow, 150);
 
-  mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
-    console.error(`Renderer failed to load: [${code}] ${desc} at ${url}`);
-  });
-  mainWindow.on('close', () => {
-    console.log('Main window received close event');
+  mainWindow.on('close', (e) => {
+    if (!isQuitting && getDb().settings.closeToTray) {
+      e.preventDefault();
+      mainWindow?.hide();
+    }
   });
 
   if (isDev) {
@@ -99,17 +109,12 @@ function createWindow() {
   });
 }
 
-// Handle second instance activation: instantly bring to front
 app.on('second-instance', () => {
   if (mainWindow) {
+    if (!mainWindow.isVisible()) mainWindow.show();
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();
   }
-});
-
-// Crash resilience
-app.on('child-process-gone', (_event, details) => {
-  console.warn('Child process gone:', details.type, details.reason);
 });
 
 process.on('uncaughtException', (err) => {
@@ -122,13 +127,27 @@ process.on('unhandledRejection', (reason) => {
 app.whenReady().then(() => {
   createWindow();
 
-  // Register all IPC handlers
-  setupPlayerIPC();
+  // Register all IPC subsystems
+  setupDatabaseIPC();
+  setupPlayerIPC(mainWindow ?? undefined);
   setupYTMusicIPC();
+  setupProvidersIPC();
   setupLibraryIPC();
   setupLyricsIPC();
+  setupCanvasIPC(getValidSpotifyTokenOrNull);
   setupScrobbleIPC();
   setupSpotifyIPC();
+  setupYouTubeAuthIPC();
+  setupSoundCloudAuthIPC();
+  setupTagEditorIPC();
+  setupTogetherIPC(mainWindow ?? undefined);
+  setupPlaylistsIoIPC(mainWindow ?? undefined);
+  setupRecognitionIPC(mainWindow ?? undefined);
+
+  if (mainWindow) {
+    desktopIntegration.init(mainWindow);
+    desktopIntegration.setupIPC();
+  }
 
   // Window control handlers
   ipcMain.on('window:minimize', () => mainWindow?.minimize());
@@ -139,9 +158,15 @@ app.whenReady().then(() => {
       mainWindow?.maximize();
     }
   });
-  ipcMain.on('window:close', () => mainWindow?.close());
+  ipcMain.on('window:close', () => {
+    if (getDb().settings.closeToTray) {
+      mainWindow?.hide();
+    } else {
+      isQuitting = true;
+      mainWindow?.close();
+    }
+  });
 
-  // File pickers
   ipcMain.handle('dialog:openDirectory', async () => {
     const result = await dialog.showOpenDialog({
       properties: ['openDirectory'],
@@ -153,15 +178,17 @@ app.whenReady().then(() => {
     const result = await dialog.showOpenDialog({
       properties: ['openFile', 'multiSelections'],
       filters: [
-        { name: 'Audio', extensions: ['mp3', 'flac', 'wav', 'ogg', 'm4a', 'aac', 'opus', 'wma'] },
+        {
+          name: 'Audio',
+          extensions: ['mp3', 'flac', 'wav', 'ogg', 'm4a', 'aac', 'opus', 'wma'],
+        },
       ],
     });
     return result.filePaths;
   });
 
-  // Open external URL in default browser
   ipcMain.on('shell:openExternal', (_event, url: string) => {
-    shell.openExternal(url);
+    void shell.openExternal(url);
   });
 
   app.on('activate', () => {
@@ -170,14 +197,25 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => {
-  cleanupMpv();
+  isQuitting = true;
+  saveDbImmediate();
+  playerInstance.shutdown();
+  togetherManager.leaveRoom();
+  desktopIntegration.destroy();
 });
 
 app.on('will-quit', () => {
-  cleanupMpv();
+  globalShortcut.unregisterAll();
+  saveDbImmediate();
+  playerInstance.shutdown();
+  togetherManager.leaveRoom();
+  desktopIntegration.destroy();
 });
 
 app.on('window-all-closed', () => {
-  cleanupMpv();
+  saveDbImmediate();
+  playerInstance.shutdown();
+  togetherManager.leaveRoom();
+  desktopIntegration.destroy();
   if (process.platform !== 'darwin') app.quit();
 });

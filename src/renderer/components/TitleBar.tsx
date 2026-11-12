@@ -1,36 +1,66 @@
 import React from 'react';
-import { Minus, Square, X } from 'lucide-react';
+import { Minus, Square, X, PictureInPicture2 } from 'lucide-react';
+import { useUIStore } from '../store';
 
 export default function TitleBar() {
+  const { isMiniPipMode, setMiniPipMode } = useUIStore();
+
+  const handleToggleMini = async () => {
+    const next = await window.electronAPI?.toggleMiniMode();
+    if (typeof next === 'boolean') {
+      setMiniPipMode(next);
+    }
+  };
+
   return (
-    <div className="titlebar-drag flex items-center h-10 px-4 bg-surface-container select-none shrink-0">
-      {/* App name */}
-      <span className="text-sm font-medium text-on-surface-variant tracking-wide">
-        🌸 ArchiveTune
-      </span>
+    <div
+      className="flex items-center justify-between h-9 px-4 bg-surface-container border-b border-outline-variant/40 flex-shrink-0"
+      style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+    >
+      <div className="flex items-center gap-2">
+        <span className="text-primary font-black text-sm tracking-wide">🌸 ArchiveTune</span>
+        {!isMiniPipMode && (
+          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-primary/15 text-primary">
+            V2.0 RC
+          </span>
+        )}
+      </div>
 
-      <div className="flex-1" />
-
-      {/* Window controls (no-drag zone) */}
-      <div className="titlebar-no-drag flex items-center gap-1">
+      <div
+        className="flex items-center gap-1"
+        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+      >
+        <button
+          onClick={handleToggleMini}
+          className={`w-7 h-7 rounded-full flex items-center justify-center transition-colors ${
+            isMiniPipMode
+              ? 'bg-primary text-on-primary'
+              : 'hover:bg-surface-container-high text-on-surface-variant hover:text-on-surface'
+          }`}
+          title={isMiniPipMode ? 'Exit Mini Widget (PiP)' : 'Always-on-Top Mini Widget (PiP)'}
+        >
+          <PictureInPicture2 size={13} />
+        </button>
         <button
           onClick={() => window.electronAPI?.minimize()}
-          className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-container-high transition-colors text-on-surface-variant"
-          aria-label="Minimize"
+          className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-surface-container-high text-on-surface-variant hover:text-on-surface transition-colors"
+          title="Minimize"
         >
           <Minus size={14} />
         </button>
-        <button
-          onClick={() => window.electronAPI?.maximize()}
-          className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-container-high transition-colors text-on-surface-variant"
-          aria-label="Maximize"
-        >
-          <Square size={12} />
-        </button>
+        {!isMiniPipMode && (
+          <button
+            onClick={() => window.electronAPI?.maximize()}
+            className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-surface-container-high text-on-surface-variant hover:text-on-surface transition-colors"
+            title="Maximize"
+          >
+            <Square size={12} />
+          </button>
+        )}
         <button
           onClick={() => window.electronAPI?.close()}
-          className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-error hover:text-on-error transition-colors text-on-surface-variant"
-          aria-label="Close"
+          className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-red-500/80 text-on-surface-variant hover:text-white transition-colors"
+          title="Close"
         >
           <X size={14} />
         </button>
