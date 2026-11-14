@@ -35,6 +35,8 @@ export interface PlayerStatus {
   currentUrl: string | null;
   currentTrackId: string | null;
   activeDeck: 'A' | 'B';
+  standbyPrepared?: boolean;
+  standbyTrackId?: string | null;
   automixing: boolean;
   automixPlan?: AutoMixPlan | null;
   sleepRemainingSec: number | null;
@@ -252,8 +254,8 @@ class DualDeckMpvPlayer {
     return this.decks[this.activeDeckId === 'A' ? 'B' : 'A'];
   }
 
-  private connectPersistentSocket(deck: DeckInstance): void {
-    if (deck.persistentSocket && !deck.persistentSocket.destroyed) return;
+  private connectPersistentSocket(deck: DeckInstance): Promise<boolean> {
+    if (deck.persistentSocket && !deck.persistentSocket.destroyed) return Promise.resolve(true);
     deck.socketBuffer = '';
     for (const req of deck.pendingRequests.values()) {
       clearTimeout(req.timer);
@@ -261,53 +263,71 @@ class DualDeckMpvPlayer {
     }
     deck.pendingRequests.clear();
 
-    const sock = net.createConnection(deck.ipcPath);
-    deck.persistentSocket = sock;
+    return new Promise((resolve) => {
+      let isSettled = false;
+      const sock = net.createConnection(deck.ipcPath);
+      deck.persistentSocket = sock;
 
-    sock.on('data', (chunk) => {
-      deck.socketBuffer += chunk.toString();
-      const lines = deck.socketBuffer.split('\n');
-      deck.socketBuffer = lines.pop() || '';
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const parsed = JSON.parse(line);
-          if (parsed.event === 'file-loaded') deck.pendingLoad?.();
-          if (parsed.event === 'end-file' && parsed.reason === 'error') {
-            if (deck.pendingLoad) deck.pendingLoad(parsed.file_error || 'mpv could not open the audio stream');
-            else if (deck === this.getActiveDeck() && !deck.paused && this.recoveryRevision !== this.playbackRevision) {
-              deck.paused = true;
-              void this.recoverStream(this.playbackRevision, deck.position);
+      sock.on('connect', () => {
+        if (!isSettled) {
+          isSettled = true;
+          resolve(true);
+        }
+      });
+
+      sock.on('data', (chunk) => {
+        deck.socketBuffer += chunk.toString();
+        const lines = deck.socketBuffer.split('\n');
+        deck.socketBuffer = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const parsed = JSON.parse(line);
+            if (parsed.event === 'file-loaded') deck.pendingLoad?.();
+            if (parsed.event === 'end-file' && parsed.reason === 'error') {
+              if (deck.pendingLoad) deck.pendingLoad(parsed.file_error || 'mpv could not open the audio stream');
+              else if (deck === this.getActiveDeck() && !deck.paused && this.recoveryRevision !== this.playbackRevision) {
+                deck.paused = true;
+                void this.recoverStream(this.playbackRevision, deck.position);
+              }
             }
-          }
-          if (typeof parsed.request_id === 'number') {
-            const req = deck.pendingRequests.get(parsed.request_id);
-            if (req) {
-              clearTimeout(req.timer);
-              deck.pendingRequests.delete(parsed.request_id);
-              req.resolve(parsed.data !== undefined ? parsed.data : parsed.error === 'success' ? true : null);
+            if (typeof parsed.request_id === 'number') {
+              const req = deck.pendingRequests.get(parsed.request_id);
+              if (req) {
+                clearTimeout(req.timer);
+                deck.pendingRequests.delete(parsed.request_id);
+                req.resolve(parsed.data !== undefined ? parsed.data : parsed.error === 'success' ? true : null);
+              }
             }
-          }
-        } catch { /* wait for more chunks */ }
-      }
-    });
+          } catch { /* wait for more chunks */ }
+        }
+      });
 
-    sock.on('error', () => {
-      deck.persistentSocket = null;
-      for (const req of deck.pendingRequests.values()) {
-        clearTimeout(req.timer);
-        req.resolve(null);
-      }
-      deck.pendingRequests.clear();
-    });
+      sock.on('error', () => {
+        deck.persistentSocket = null;
+        for (const req of deck.pendingRequests.values()) {
+          clearTimeout(req.timer);
+          req.resolve(null);
+        }
+        deck.pendingRequests.clear();
+        if (!isSettled) {
+          isSettled = true;
+          resolve(false);
+        }
+      });
 
-    sock.on('close', () => {
-      deck.persistentSocket = null;
-      for (const req of deck.pendingRequests.values()) {
-        clearTimeout(req.timer);
-        req.resolve(null);
-      }
-      deck.pendingRequests.clear();
+      sock.on('close', () => {
+        deck.persistentSocket = null;
+        for (const req of deck.pendingRequests.values()) {
+          clearTimeout(req.timer);
+          req.resolve(null);
+        }
+        deck.pendingRequests.clear();
+        if (!isSettled) {
+          isSettled = true;
+          resolve(false);
+        }
+      });
     });
   }
 
@@ -345,8 +365,10 @@ class DualDeckMpvPlayer {
   private async loadDeckStream(
     deck: DeckInstance, url: string, headers?: Record<string, string>
   ): Promise<void> {
-    await this.sendDeckCommand(deck, ['set_property', 'http-header-fields',
-      Object.entries(headers || {}).map(([name, value]) => `${name}: ${value}`)]);
+    if (headers && Object.keys(headers).length > 0) {
+      await this.sendDeckCommand(deck, ['set_property', 'http-header-fields',
+        Object.entries(headers).map(([name, value]) => `${name}: ${value}`)]);
+    }
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => finish('Audio stream loading timed out'), 20000);
       const finish = (error?: string) => {
@@ -455,16 +477,15 @@ class DualDeckMpvPlayer {
       }
     });
 
-    // Wait for IPC socket file to appear
-    for (let i = 0; i < 50; i++) {
-      await new Promise((r) => setTimeout(r, 50));
-      if (process.platform === 'win32' || fs.existsSync(deck.ipcPath)) break;
+    // Fast socket connection loop (retry every 10ms instead of 50ms polling + 80ms sleep)
+    const startTime = Date.now();
+    while (Date.now() - startTime < 2000) {
+      if (process.platform === 'win32' || fs.existsSync(deck.ipcPath)) {
+        const ok = await this.connectPersistentSocket(deck);
+        if (ok) break;
+      }
+      await new Promise((r) => setTimeout(r, 10));
     }
-
-    // Establish persistent socket connection
-    this.connectPersistentSocket(deck);
-    // Give it a moment to connect
-    await new Promise((r) => setTimeout(r, 80));
   }
 
   private async loadSponsorBlockSegments(videoId: string): Promise<void> {
@@ -539,12 +560,10 @@ class DualDeckMpvPlayer {
       active.volume = this.masterVolume;
       this.activeMeta = meta;
 
-      await this.sendDeckCommand(active, ['set_property', 'volume', this.masterVolume]);
-      if (revision !== this.playbackRevision) throw new Error('Playback cancelled');
-      await this.sendDeckCommand(active, ['set_property', 'speed', this.currentSpeed]);
-      if (revision !== this.playbackRevision) throw new Error('Playback cancelled');
-      await this.applyFiltersToDeck(active);
-      if (revision !== this.playbackRevision) throw new Error('Playback cancelled');
+      // Pipeline deck properties without sequential awaiting
+      void this.sendDeckCommand(active, ['set_property', 'volume', this.masterVolume]);
+      void this.sendDeckCommand(active, ['set_property', 'speed', this.currentSpeed]);
+      void this.applyFiltersToDeck(active);
       if (!prepared) await this.loadDeckStream(active, url, meta.headers);
       if (revision !== this.playbackRevision) throw new Error('Playback cancelled');
       // Explicitly unpause immediately after loadfile so network streams start playing without hanging
@@ -977,6 +996,7 @@ class DualDeckMpvPlayer {
 
   public getStatus(): PlayerStatus {
     const d = this.getActiveDeck();
+    const standby = this.getStandbyDeck();
     return {
       isPlaying: !d.paused,
       position: d.position,
@@ -987,11 +1007,18 @@ class DualDeckMpvPlayer {
       currentUrl: d.currentUrl,
       currentTrackId: d.currentTrackId,
       activeDeck: this.activeDeckId,
+      standbyPrepared: standby.prepared,
+      standbyTrackId: standby.prepared ? standby.currentTrackId : null,
       automixing: this.isAutomixing,
       automixPlan: this.currentPlan,
       sleepRemainingSec: this.sleepTimerEndMs ? Math.max(0, Math.round((this.sleepTimerEndMs - Date.now()) / 1000)) : null,
       sleepAfterTrack: this.sleepAfterTrack,
     };
+  }
+
+  public prewarm(): void {
+    void this.ensureDeckSpawned(this.decks.A);
+    void this.ensureDeckSpawned(this.decks.B);
   }
 
   public shutdown(): void {
@@ -1021,6 +1048,7 @@ export function setupPlayerIPC(win?: BrowserWindow): void {
   setupPlaybackCacheIPC();
   setupNativeSpotifyIPC(getSpotifyAudioCredentials);
   if (win) playerInstance.setWindow(win);
+  playerInstance.prewarm();
   ipcMain.handle('player:play', (_e, url: string, meta: TrackPlayMeta) => playerInstance.play(url, meta));
   ipcMain.handle('player:prebufferNext', (_e, nextData: NextQueueTrackData | null) => playerInstance.prebufferNext(nextData));
   ipcMain.handle('player:pause', () => playerInstance.pause());

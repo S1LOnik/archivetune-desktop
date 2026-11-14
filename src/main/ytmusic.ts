@@ -9,8 +9,9 @@
  * - Audio Stream extraction via `yt-dlp` with expiry cache
  */
 
-import { ipcMain } from 'electron';
+import { ipcMain, app } from 'electron';
 import { execFile } from 'child_process';
+import path from 'path';
 import https from 'https';
 import type { Innertube } from 'youtubei.js';
 import {
@@ -586,9 +587,75 @@ export async function ytmusicGetExplore() {
 
 const pendingStreams = new Map<string, Promise<string | null>>();
 
+function fetchDirectInnerTubeStream(videoId: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const postData = JSON.stringify({
+      videoId,
+      context: {
+        client: {
+          clientName: 'ANDROID_VR',
+          clientVersion: '1.61.48',
+          deviceMake: 'Oculus',
+          deviceModel: 'Quest 3',
+          osName: 'Android',
+          osVersion: '12',
+          androidSdkVersion: 32,
+          hl: 'en',
+          gl: 'US',
+        },
+      },
+    });
+
+    const req = https.request(
+      'https://www.youtube.com/youtubei/v1/player?prettyPrint=false',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Android; Mobile; rv:109.0) Gecko/114.0 Firefox/114.0',
+          'X-YouTube-Client-Name': '28',
+          'X-YouTube-Client-Version': '1.61.48',
+          'Content-Length': Buffer.byteLength(postData),
+        },
+        timeout: 4000,
+      },
+      (res) => {
+        let body = '';
+        res.on('data', (chunk) => { body += chunk; });
+        res.on('end', () => {
+          try {
+            const data = JSON.parse(body);
+            if (data.playabilityStatus?.status !== 'OK') return resolve(null);
+            const formats = (data.streamingData?.adaptiveFormats || []).filter(
+              (f: any) => f.mimeType && f.mimeType.includes('audio/') && f.url
+            );
+            if (formats.length === 0) return resolve(null);
+            formats.sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0));
+            const best = formats.find((f: any) => f.itag === 251) || formats.find((f: any) => f.itag === 140) || formats[0];
+            resolve(best?.url || null);
+          } catch {
+            resolve(null);
+          }
+        });
+      }
+    );
+
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.write(postData);
+    req.end();
+  });
+}
+
 function extractStreamCandidates(videoId: string): Promise<string[]> {
   return new Promise((resolve) => {
-    execFile('yt-dlp', ['-J', '--no-playlist', `https://www.youtube.com/watch?v=${videoId}`],
+    let cacheDir: string;
+    try {
+      cacheDir = path.join(app.getPath('userData'), 'yt-dlp-cache');
+    } catch {
+      cacheDir = '/tmp/archivetune-ytdlp-cache';
+    }
+    execFile('yt-dlp', ['--cache-dir', cacheDir, '-J', '--no-playlist', `https://www.youtube.com/watch?v=${videoId}`],
       { timeout: 20000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
         if (err || !stdout) return resolve([]);
         try {
@@ -621,13 +688,29 @@ export function ytmusicGetStreamUrl(videoId: string): Promise<string | null> {
   const pending = pendingStreams.get(videoId);
   if (pending) return pending;
   const task = (async () => {
+    // 1. Ultra-fast direct InnerTube probe (~150-200ms vs 2.2s yt-dlp)
+    const directFast = await fetchDirectInnerTubeStream(videoId);
+    if (directFast) {
+      if (streamUrlCache.size >= 150) streamUrlCache.delete(streamUrlCache.keys().next().value!);
+      streamUrlCache.set(videoId, { url: directFast, expiresAt: Date.now() + 20 * 60 * 1000 });
+      return directFast;
+    }
+
+    // 2. Secondary fallback via yt-dlp with caching
     const candidates = await extractStreamCandidates(videoId);
     let url: string | null = null;
-    // Probe a few audio formats in parallel, without repeating YouTube extraction.
-    for (let i = 0; i < candidates.length && !url; i += 4) {
-      const batch = candidates.slice(i, i + 4);
-      const available = await Promise.all(batch.map(isStreamAccessible));
-      url = batch.find((_, index) => available[index]) || null;
+    if (candidates.length > 0) {
+      // First candidate is already highest bitrate format
+      const firstAccessible = await isStreamAccessible(candidates[0]);
+      if (firstAccessible) {
+        url = candidates[0];
+      } else {
+        for (let i = 1; i < candidates.length && !url; i += 4) {
+          const batch = candidates.slice(i, i + 4);
+          const available = await Promise.all(batch.map(isStreamAccessible));
+          url = batch.find((_, index) => available[index]) || null;
+        }
+      }
     }
     if (url) {
       if (streamUrlCache.size >= 150) streamUrlCache.delete(streamUrlCache.keys().next().value!);

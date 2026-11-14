@@ -521,7 +521,7 @@ async function resolveBySourceId(
   source: AudioSourceId,
   track: { id: string; title: string; artist: string; album?: string; duration?: number },
   settings: ReturnType<typeof getDb>['settings']
-): Promise<{ url: string; qualityLabel: string; lossless: boolean; actualSource?: AudioSourceId } | null> {
+): Promise<{ url: string; qualityLabel: string; lossless: boolean; actualSource?: AudioSourceId; headers?: Record<string, string> } | null> {
   const query = `${track.title} ${track.artist}`.trim();
   const wantedDurMs = track.duration ? track.duration * 1000 : undefined;
 
@@ -728,6 +728,8 @@ async function resolveCandidateDirectStream(
   return null;
 }
 
+const universalResolutionCache = new Map<string, { res: SmartStreamResolution; expiresAt: number }>();
+
 export async function resolveUniversalStream(
   track: { id: string; title: string; artist: string; album?: string; duration?: number; source: string; path?: string },
   forceSource?: AudioSourceId,
@@ -747,6 +749,14 @@ export async function resolveUniversalStream(
       lossless: Boolean(track.path?.toLowerCase().endsWith('.flac') || track.path?.toLowerCase().endsWith('.wav')),
       switched: false,
     };
+  }
+
+  const cacheKey = `${track.source}:${track.id}:${track.title}:${track.artist}:${forceSource || 'auto'}`;
+  if (!forceSource && excludedSources.length === 0) {
+    const cached = universalResolutionCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.res;
+    }
   }
 
   const settings = getDb().settings;
@@ -808,8 +818,9 @@ export async function resolveUniversalStream(
         } else if (switched) {
           switchedReason = `Fallback → ${resolved.qualityLabel}`;
         }
-        return {
+        const outcome: SmartStreamResolution = {
           streamUrl: resolved.url,
+          headers: resolved.headers,
           actualSource,
           originalSource: track.source,
           qualityLabel: resolved.qualityLabel,
@@ -817,6 +828,13 @@ export async function resolveUniversalStream(
           switched,
           switchedReason,
         };
+        if (!forceSource && excludedSources.length === 0 && resolved.url) {
+          if (universalResolutionCache.size >= 200) {
+            universalResolutionCache.delete(universalResolutionCache.keys().next().value!);
+          }
+          universalResolutionCache.set(cacheKey, { res: outcome, expiresAt: Date.now() + 15 * 60 * 1000 });
+        }
+        return outcome;
       }
     } catch { /* try next source */ }
   }
