@@ -611,9 +611,13 @@ class DualDeckMpvPlayer {
     if (revision !== this.prebufferRevision) return { ok: false };
     await this.sendDeckCommand(standby, ['set_property', 'volume', 0]);
     if (revision !== this.prebufferRevision) return { ok: false };
-    await this.loadDeckStream(standby, nextData.url, nextData.headers);
-    if (revision !== this.prebufferRevision) return { ok: false };
-    if (this.nextPrepared === nextData && standby.currentUrl === nextData.url) standby.prepared = true;
+    try {
+      await this.loadDeckStream(standby, nextData.url, nextData.headers);
+      if (revision !== this.prebufferRevision) return { ok: false };
+      if (this.nextPrepared === nextData && standby.currentUrl === nextData.url) standby.prepared = true;
+    } catch {
+      return { ok: false };
+    }
 
     if (this.smartDjEnabled) {
       analyzeAudioForAutomix(nextData.meta.id, nextData.url, nextData.meta.duration || 180)
@@ -657,9 +661,12 @@ class DualDeckMpvPlayer {
       const deck = this.getActiveDeck();
       if (!deck.proc || deck.paused) return;
 
-      const pos = await this.sendDeckCommand(deck, ['get_property', 'time-pos']);
-      const dur = await this.sendDeckCommand(deck, ['get_property', 'duration']);
-      const idle = await this.sendDeckCommand(deck, ['get_property', 'core-idle']);
+      const [pos, dur, idle, eof] = await Promise.all([
+        this.sendDeckCommand(deck, ['get_property', 'time-pos']),
+        this.sendDeckCommand(deck, ['get_property', 'duration']),
+        this.sendDeckCommand(deck, ['get_property', 'core-idle']),
+        this.sendDeckCommand(deck, ['get_property', 'eof-reached']),
+      ]);
 
       if (typeof pos === 'number') {
         deck.position = pos;
@@ -722,7 +729,6 @@ class DualDeckMpvPlayer {
         return;
       }
 
-      const eof = await this.sendDeckCommand(deck, ['get_property', 'eof-reached']);
       if ((eof === true || (idle === true && deck.duration > 1 && deck.position >= deck.duration - 1.5)) && !this.isAutomixing) {
         deck.paused = true;
         if (this.sleepAfterTrack) {
@@ -861,10 +867,14 @@ class DualDeckMpvPlayer {
     ++this.playbackRevision;
     ++this.prebufferRevision;
     this.cancelAutomix();
+    this.nextPrepared = null;
     for (const id of ['A', 'B'] as const) {
       const d = this.decks[id];
       d.paused = true;
       d.position = 0;
+      d.prepared = false;
+      d.currentUrl = null;
+      d.currentTrackId = null;
       await this.sendDeckCommand(d, ['stop']);
     }
   }
