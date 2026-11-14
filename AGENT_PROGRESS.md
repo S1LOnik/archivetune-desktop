@@ -34,8 +34,9 @@
 | PERF-01 | Player / Providers | P0 | Playback startup latency high due to sequential `yt-dlp` execution and redundant probing | **RESOLVED** |
 | PERF-02 | DualDeck MPV | P0 | Cold deck initialization, 50ms polling loops, and sequential IPC awaits delaying start | **RESOLVED** |
 | PERF-03 | Providers / Cache | P1 | Missing memory resolution cache in `providers.ts` causing repeat network roundtrips | **RESOLVED** |
-| STAB-01 | Memory / IPC | P1 | Event listeners on Electron IPC and MPV sockets cleanup audit | In Progress |
-| STAB-02 | DualDeck Handover | P1 | Race conditions during rapid skip/scrub before MPV `file-loaded` | In Progress |
+| STAB-01 | DualDeck MPV | P1 | 4 sequential socket commands every 250ms polling reduced to 1 concurrent roundtrip via `Promise.all` | **RESOLVED** |
+| STAB-02 | DualDeck Prebuffer | P1 | Standby deck unhandled rejection on rapid skip and lingering state on stop | **RESOLVED** |
+| MEM-01 | IPC / Renderer | P1 | Verify window destroy and IPC listener cleanup across renderer unmounts | Planned |
 | ARCH-01 | Store / UI | P2 | State synchronization between renderer stores and main process player state | Planned |
 
 ---
