@@ -60,7 +60,7 @@ export default function TogetherPage() {
 
       {together.role === 'idle' ? (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          <div className="p-5 rounded-3xl bg-surface-container border border-outline-variant/25 space-y-4">
+          <div className="p-5 rounded-3xl bg-surface-container   space-y-4">
             <h2 className="text-base font-bold text-on-surface flex items-center gap-2">
               <Radio size={17} className="text-primary" /> Создать комнату (Host)
             </h2>
@@ -87,7 +87,7 @@ export default function TogetherPage() {
             </div>
           </div>
 
-          <div className="p-5 rounded-3xl bg-surface-container border border-outline-variant/25 space-y-4">
+          <div className="p-5 rounded-3xl bg-surface-container   space-y-4">
             <h2 className="text-base font-bold text-on-surface flex items-center gap-2">
               <Link2 size={17} className="text-primary" /> Подключиться к другу (Guest)
             </h2>
@@ -115,7 +115,7 @@ export default function TogetherPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-          <div className="lg:col-span-1 p-5 rounded-3xl bg-surface-container border border-emerald-500/30 space-y-4">
+          <div className="lg:col-span-1 p-5 rounded-3xl bg-surface-container   space-y-4">
             <div className="flex items-center justify-between">
               <span className="px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-bold uppercase">
                 {together.role} • {together.roomCode}
@@ -162,7 +162,7 @@ export default function TogetherPage() {
             </div>
           </div>
 
-          <div className="lg:col-span-2 p-5 rounded-3xl bg-surface-container border border-outline-variant/25 flex flex-col h-[420px]">
+          <div className="lg:col-span-2 p-5 rounded-3xl bg-surface-container   flex flex-col h-[420px]">
             <h3 className="text-sm font-bold text-on-surface mb-3">Чат комнаты</h3>
             <div className="flex-1 overflow-y-auto space-y-2 pr-2">
               {together.chat.length === 0 ? (
@@ -178,7 +178,7 @@ export default function TogetherPage() {
                 ))
               )}
             </div>
-            <div className="flex gap-2 pt-3 border-t border-outline-variant/20 mt-2">
+            <div className="flex gap-2 pt-3   mt-2">
               <input
                 value={chatMsg}
                 onChange={(e) => setChatMsg(e.target.value)}

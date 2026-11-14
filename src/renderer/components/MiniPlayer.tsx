@@ -69,10 +69,10 @@ export default function MiniPlayer() {
   };
 
   return (
-    <div className="bg-surface-container/95 backdrop-blur-xl border-t border-outline-variant/40 px-4 py-2 flex flex-col gap-1 flex-shrink-0">
+    <div className="player-bar flex flex-col gap-1.5 flex-shrink-0 select-none">
       {/* Progress bar */}
       <div
-        className="w-full h-1.5 bg-surface-container-highest rounded-full cursor-pointer relative group"
+        className="w-full h-1.5 bg-surface-container-highest/80 rounded-full cursor-pointer relative group transition-all hover:h-2"
         onClick={(e) => {
           const rect = e.currentTarget.getBoundingClientRect();
           const ratio = (e.clientX - rect.left) / rect.width;
@@ -80,11 +80,11 @@ export default function MiniPlayer() {
         }}
       >
         <div
-          className="h-full bg-primary rounded-full transition-all"
+          className="h-full bg-gradient-to-r from-primary to-rose-400 rounded-full transition-all"
           style={{ width: `${progress * 100}%` }}
         />
         <div
-          className="w-3 h-3 bg-primary rounded-full absolute -top-1 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity shadow"
+          className="w-3.5 h-3.5 bg-white rounded-full absolute -top-1 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity shadow-md pointer-events-none"
           style={{ left: `${progress * 100}%` }}
         />
       </div>
@@ -94,21 +94,21 @@ export default function MiniPlayer() {
         <div className="flex items-center gap-3 min-w-0 flex-1">
           <div
             onClick={() => setShowNowPlaying(true)}
-            className="w-11 h-11 rounded-xl overflow-hidden bg-surface-container-high flex-shrink-0 cursor-pointer relative group"
+            className="w-12 h-12 rounded-2xl overflow-hidden bg-surface-container-high flex-shrink-0 cursor-pointer relative group shadow-sm"
           >
             {currentTrack.thumbnail ? (
               <img
                 src={currentTrack.thumbnail}
                 alt={currentTrack.title}
-                className="w-full h-full object-cover"
+                className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
               />
             ) : (
-              <div className="w-full h-full flex items-center justify-center text-primary text-lg">
+              <div className="w-full h-full flex items-center justify-center text-primary text-xl font-bold">
                 🎵
               </div>
             )}
-            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-              <ChevronUp size={18} className="text-white" />
+            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity rounded-2xl">
+              <ChevronUp size={20} className="text-white" />
             </div>
           </div>
 
@@ -116,23 +116,23 @@ export default function MiniPlayer() {
             <div className="flex items-center gap-2">
               <p
                 onClick={() => setShowNowPlaying(true)}
-                className="text-sm font-bold text-on-surface truncate hover:text-primary transition-colors cursor-pointer"
+                className="text-sm font-bold text-on-surface truncate hover:text-primary transition-colors cursor-pointer leading-snug"
               >
                 {currentTrack.title}
               </p>
               {automixing && (
-                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 flex items-center gap-1 flex-shrink-0">
+                <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 flex items-center gap-1 flex-shrink-0">
                   <Disc3 size={10} className="animate-spin" />
                   MIX
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-2 text-xs text-on-surface-variant">
+            <div className="flex items-center gap-2 text-xs text-on-surface-variant mt-0.5">
               <span className="truncate">{currentTrack.artist}</span>
               {resolvedSourceBadge && (
                 <button
                   onClick={() => setSourceSwitcherTrack(currentTrack)}
-                  className={`hidden md:inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold transition hover:brightness-110 ${
+                  className={`hidden md:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold transition hover:brightness-110 shadow-sm ${
                     isLosslessActive
                       ? 'bg-emerald-500/20 text-emerald-300'
                       : 'bg-surface-container-highest text-primary'
@@ -148,12 +148,12 @@ export default function MiniPlayer() {
 
           <button
             onClick={() => toggleLikeCurrent(currentTrack)}
-            className={`p-1.5 rounded-full transition-colors flex-shrink-0 ${
-              liked ? 'text-pink-400' : 'text-on-surface-variant hover:text-on-surface'
+            className={`p-2 rounded-full transition-colors flex-shrink-0 hover:bg-surface-container-high ${
+              liked ? 'text-primary' : 'text-on-surface-variant hover:text-on-surface'
             }`}
             title={liked ? 'Убрать из Любимых' : 'В Любимые'}
           >
-            <Heart size={15} fill={liked ? 'currentColor' : 'none'} />
+            <Heart size={16} fill={liked ? 'currentColor' : 'none'} />
           </button>
         </div>
 
@@ -161,55 +161,55 @@ export default function MiniPlayer() {
         <div className="flex items-center gap-2">
           <button
             onClick={toggleShuffle}
-            className={`p-1.5 rounded-full transition-colors ${
+            className={`p-2 rounded-full transition-colors hover:bg-surface-container-high ${
               shuffle ? 'text-primary' : 'text-on-surface-variant hover:text-on-surface'
             }`}
             title="Перемешать"
           >
-            <Shuffle size={15} />
+            <Shuffle size={16} />
           </button>
 
           <button
             onClick={skipPrev}
-            className="p-1.5 rounded-full text-on-surface-variant hover:text-on-surface transition-colors"
+            className="p-2 rounded-full text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors"
             title="Предыдущий"
           >
-            <SkipBack size={18} />
+            <SkipBack size={19} />
           </button>
 
           <button
             onClick={() => (isPlaying ? pause() : resume())}
             disabled={loading}
-            className="w-9 h-9 rounded-full bg-primary text-on-primary flex items-center justify-center hover:opacity-90 transition-opacity disabled:opacity-50 shadow-md shadow-primary/20"
+            className="w-10 h-10 rounded-2xl bg-gradient-to-r from-primary to-rose-400 text-white flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-md shadow-primary/25 disabled:opacity-50"
             title={isPlaying ? 'Пауза' : 'Воспроизвести'}
           >
             {loading ? (
-              <div className="w-4 h-4 border-2 border-on-primary border-t-transparent rounded-full animate-spin" />
+              <div className="w-4 h-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
             ) : isPlaying ? (
-              <Pause size={17} />
+              <Pause size={18} />
             ) : (
-              <Play size={17} className="translate-x-0.5" />
+              <Play size={18} className="translate-x-0.5" />
             )}
           </button>
 
           <button
             onClick={skipNext}
-            className="p-1.5 rounded-full text-on-surface-variant hover:text-on-surface transition-colors"
+            className="p-2 rounded-full text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors"
             title="Следующий"
           >
-            <SkipForward size={18} />
+            <SkipForward size={19} />
           </button>
 
           <button
             onClick={nextRepeat}
-            className={`p-1.5 rounded-full transition-colors relative ${
+            className={`p-2 rounded-full transition-colors relative hover:bg-surface-container-high ${
               repeat !== 'none' ? 'text-primary' : 'text-on-surface-variant hover:text-on-surface'
             }`}
             title={`Повтор: ${repeat}`}
           >
-            <Repeat size={15} />
+            <Repeat size={16} />
             {repeat === 'one' && (
-              <span className="absolute -top-0.5 -right-0.5 text-[9px] bg-primary text-on-primary rounded-full w-3 h-3 flex items-center justify-center font-bold">
+              <span className="absolute 1 top-1 right-1 text-[8px] bg-primary text-white rounded-full w-3 h-3 flex items-center justify-center font-bold">
                 1
               </span>
             )}
@@ -235,36 +235,36 @@ export default function MiniPlayer() {
 
           <button
             onClick={() => setAuditTarget({ track: currentTrack, urlOrPath: currentTrack.path })}
-            className="p-1.5 rounded-full text-on-surface-variant hover:text-primary transition"
+            className="p-2 rounded-full text-on-surface-variant hover:text-primary hover:bg-surface-container-high transition"
             title="Акустический аудит качества (FFT)"
           >
-            <Activity size={15} />
+            <Activity size={16} />
           </button>
 
           <button
             onClick={toggleQueueDrawer}
-            className={`p-1.5 rounded-full transition ${
+            className={`p-2 rounded-full transition hover:bg-surface-container-high ${
               queueDrawerOpen ? 'text-primary bg-primary/15' : 'text-on-surface-variant hover:text-on-surface'
             }`}
             title="Очередь и AutoMix"
           >
-            <ListMusic size={15} />
+            <ListMusic size={16} />
           </button>
 
-          <span className="text-xs text-on-surface-variant hidden sm:block tabular-nums">
+          <span className="text-xs text-on-surface-variant hidden sm:block tabular-nums font-mono">
             {formatTime(position)} / {formatTime(duration)}
           </span>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-2">
             <button
               onClick={() => {
                 const next = volume > 0 ? 0 : 0.85;
                 setVolume(next);
                 void window.electronAPI?.player.setVolume(next);
               }}
-              className="text-on-surface-variant hover:text-on-surface transition-colors"
+              className="text-on-surface-variant hover:text-on-surface transition-colors p-1"
             >
-              {volume === 0 ? <VolumeX size={16} /> : <Volume2 size={16} />}
+              {volume === 0 ? <VolumeX size={17} /> : <Volume2 size={17} />}
             </button>
             <input
               type="range"
@@ -277,7 +277,7 @@ export default function MiniPlayer() {
                 setVolume(v);
                 void window.electronAPI?.player.setVolume(v);
               }}
-              className="w-20 accent-primary cursor-pointer"
+              className="w-20 accent-primary cursor-pointer h-1.5 rounded-full"
             />
           </div>
         </div>

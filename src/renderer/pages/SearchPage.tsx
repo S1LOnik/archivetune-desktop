@@ -169,7 +169,7 @@ export default function SearchPage() {
       {/* Search bar + live suggestions dropdown */}
       <div ref={inputWrapperRef} className="relative">
         <form onSubmit={handleSubmit} className="flex gap-3">
-          <div className="flex-1 flex items-center gap-3 bg-surface-container-high rounded-2xl px-4 py-3 border border-outline-variant/40 focus-within:border-primary transition-colors shadow-sm">
+          <div className="flex-1 flex items-center gap-3 bg-surface-container-high rounded-2xl px-4 py-3 focus-within: transition-colors shadow-sm">
             <Search size={18} className="text-on-surface-variant flex-shrink-0" />
             <input
               type="text"
@@ -207,7 +207,7 @@ export default function SearchPage() {
         </form>
 
         {showSuggestions && suggestions.length > 0 && (
-          <div className="absolute left-0 right-24 top-full mt-2 z-40 rounded-2xl bg-surface-container-high border border-outline-variant/30 shadow-2xl overflow-hidden py-1">
+          <div className="absolute left-0 right-24 top-full mt-2 z-40 rounded-2xl bg-surface-container-high shadow-2xl overflow-hidden py-1">
             {suggestions.map((sug, idx) => (
               <button
                 key={`${sug}-${idx}`}
@@ -279,7 +279,7 @@ export default function SearchPage() {
               onClick={() => setEntityFilter(et.id)}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
                 entityFilter === et.id
-                  ? 'bg-surface-container-highest text-primary border border-primary/40'
+                  ? 'bg-surface-container-highest text-primary  '
                   : 'bg-surface-container/60 text-on-surface-variant hover:text-on-surface'
               }`}
             >
@@ -303,21 +303,21 @@ export default function SearchPage() {
         </div>
       ) : !searched ? (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-4">
-          <div className="p-5 rounded-2xl bg-surface-container border border-outline-variant/20 space-y-2">
+          <div className="p-5 rounded-2xl bg-surface-container space-y-2">
             <Sparkles size={22} className="text-primary" />
             <h3 className="text-sm font-bold text-on-surface">Tidal &amp; Qobuz Hi-Res</h3>
             <p className="text-xs text-on-surface-variant">
               Авто-подбор 16/24-bit FLAC потоков через Smart Stream Resolver &amp; TrackMatching.
             </p>
           </div>
-          <div className="p-5 rounded-2xl bg-surface-container border border-outline-variant/20 space-y-2">
+          <div className="p-5 rounded-2xl bg-surface-container space-y-2">
             <Radio size={22} className="text-primary" />
             <h3 className="text-sm font-bold text-on-surface">8-Platform Failover Matrix</h3>
             <p className="text-xs text-on-surface-variant">
               Моментальное переключение между Tidal, Qobuz, YouTube Music, Deezer, JioSaavn и SoundCloud.
             </p>
           </div>
-          <div className="p-5 rounded-2xl bg-surface-container border border-outline-variant/20 space-y-2">
+          <div className="p-5 rounded-2xl bg-surface-container space-y-2">
             <Music size={22} className="text-primary" />
             <h3 className="text-sm font-bold text-on-surface">Word-by-Word Караоке</h3>
             <p className="text-xs text-on-surface-variant">

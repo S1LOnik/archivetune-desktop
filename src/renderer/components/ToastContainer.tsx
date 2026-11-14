@@ -11,32 +11,32 @@ export default function ToastContainer() {
       case 'lossless':
         return {
           icon: <Sparkles size={16} className="text-emerald-400" />,
-          border: 'border-emerald-400/40 bg-emerald-950/85 text-emerald-50',
+          surface: ' bg-emerald-950/85 text-emerald-50',
         };
       case 'switch':
         return {
           icon: <ArrowLeftRight size={16} className="text-amber-300" />,
-          border: 'border-amber-400/40 bg-surface-container-highest/95 text-on-surface',
+          surface: ' bg-surface-container-highest/95 text-on-surface',
         };
       case 'sponsorblock':
         return {
           icon: <ShieldCheck size={16} className="text-sky-400" />,
-          border: 'border-sky-400/40 bg-surface-container-highest/95 text-on-surface',
+          surface: ' bg-surface-container-highest/95 text-on-surface',
         };
       case 'automix':
         return {
           icon: <Disc3 size={16} className="text-primary animate-spin" />,
-          border: 'border-primary/40 bg-surface-container-highest/95 text-on-surface',
+          surface: ' bg-surface-container-highest/95 text-on-surface',
         };
       case 'error':
         return {
           icon: <AlertCircle size={16} className="text-red-400" />,
-          border: 'border-red-400/50 bg-red-950/90 text-red-50',
+          surface: ' bg-red-950/90 text-red-50',
         };
       default:
         return {
           icon: <Sparkles size={16} className="text-primary" />,
-          border: 'border-outline-variant/40 bg-surface-container-highest/95 text-on-surface',
+          surface: ' bg-surface-container-highest/95 text-on-surface',
         };
     }
   };
@@ -48,7 +48,7 @@ export default function ToastContainer() {
         return (
           <div
             key={t.id}
-            className={`pointer-events-auto flex items-center gap-3 px-3.5 py-2.5 rounded-2xl border shadow-2xl backdrop-blur-xl text-xs font-medium transition-all ${s.border}`}
+            className={`pointer-events-auto flex items-center gap-3 px-3.5 py-2.5 rounded-2xl  shadow-2xl backdrop-blur-xl text-xs font-medium transition-all ${s.surface}`}
           >
             <span className="flex-shrink-0">{s.icon}</span>
             <span className="flex-1 leading-snug">{t.message}</span>

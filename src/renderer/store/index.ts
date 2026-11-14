@@ -901,9 +901,9 @@ interface UIState {
 export function applyThemeCssVars(theme: 'dark' | 'light' | 'amoled', seedHex: string) {
   const root = document.documentElement;
   const hex = seedHex.replace(/^#/, '');
-  const r = parseInt(hex.slice(0, 2), 16) || 203;
-  const g = parseInt(hex.slice(2, 4), 16) || 185;
-  const b = parseInt(hex.slice(4, 6), 16) || 245;
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
 
   root.style.setProperty('--md-primary', seedHex);
   root.style.setProperty('--md-primary-rgb', `${r}, ${g}, ${b}`);
@@ -943,6 +943,16 @@ export function applyThemeCssVars(theme: 'dark' | 'light' | 'amoled', seedHex: s
     root.style.setProperty('--md-outline-variant', '#49454f');
     root.style.setProperty('--md-on-primary', '#341e72');
   }
+  // Tint every surface so artwork colours reach the page, sidebar and cards.
+  const mix = (base: number, amount: number) =>
+    `rgb(${[r, g, b].map((c) => Math.round(base * (1 - amount) + c * amount)).join(', ')})`;
+  const levels = theme === 'light'
+    ? [[248, 0.10], [240, 0.14], [232, 0.18], [222, 0.22]]
+    : theme === 'amoled'
+      ? [[0, 0], [6, 0.08], [12, 0.12], [18, 0.16]]
+      : [[14, 0.14], [22, 0.18], [30, 0.22], [38, 0.26]];
+  ['--md-surface', '--md-surface-container', '--md-surface-container-high', '--md-surface-container-highest']
+    .forEach((name, i) => root.style.setProperty(name, mix(levels[i][0], levels[i][1])));
 }
 
 export const useUIStore = create<UIState>((set, get) => ({

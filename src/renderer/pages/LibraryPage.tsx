@@ -36,8 +36,10 @@ import {
 } from '../store';
 import { usePlayer } from '../lib/usePlayer';
 import TrackRow from '../components/TrackRow';
+import OfflineLibrary from '../components/OfflineLibrary';
 
 type MainTab =
+  | 'offline'
   | 'liked'
   | 'playlists'
   | 'local'
@@ -460,6 +462,7 @@ export default function LibraryPage() {
     { id: 'liked', label: 'Любимые', count: likedSongs.length },
     { id: 'playlists', label: 'Плейлисты', count: playlists.length },
     { id: 'local', label: 'Локальные', count: tracks.length },
+    { id: 'offline', label: 'Офлайн' },
     { id: 'history', label: 'История', count: history.length },
     { id: 'blocked', label: 'Чёрный список', count: blockedArtists.length },
     { id: 'spotify', label: 'Spotify', badge: spotifyConnected ? 'ON' : undefined },
@@ -483,7 +486,7 @@ export default function LibraryPage() {
             <button
               onClick={() => void syncAllPlatforms(true)}
               disabled={syncingAll}
-              className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-surface-container-high hover:bg-surface-container-highest text-on-surface text-xs font-bold border border-outline-variant/30 transition disabled:opacity-50"
+              className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-surface-container-high hover:bg-surface-container-highest text-on-surface text-xs font-bold transition disabled:opacity-50"
               title="Синхронизировать любимые треки и плейлисты из Spotify, YouTube Music и SoundCloud"
             >
               <RefreshCw size={14} className={syncingAll ? 'animate-spin text-primary' : 'text-primary'} />
@@ -560,7 +563,7 @@ export default function LibraryPage() {
           })}
         </div>
 
-        <div className="flex items-center gap-2 bg-surface-container px-3 py-1.5 rounded-xl border border-outline-variant/25 min-w-[200px]">
+        <div className="flex items-center gap-2 bg-surface-container px-3 py-1.5 rounded-xl min-w-[200px]">
           <Search size={14} className="text-on-surface-variant" />
           <input
             type="text"
@@ -581,6 +584,8 @@ export default function LibraryPage() {
       )}
 
       {/* ==================== TAB: LIKED / LOCAL / HISTORY ==================== */}
+      {activeTab === 'offline' && <OfflineLibrary query={filterQuery} />}
+
       {(activeTab === 'liked' || activeTab === 'local' || activeTab === 'history') && (
         <>
           {activeTab === 'liked' && (
@@ -609,7 +614,7 @@ export default function LibraryPage() {
                   onClick={() => setLikedSourceFilter(pill.id as any)}
                   className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
                     likedSourceFilter === pill.id
-                      ? 'bg-primary/20 text-primary border border-primary/40'
+                      ? 'bg-primary/20 text-primary  '
                       : 'bg-surface-container text-on-surface-variant hover:text-on-surface'
                   }`}
                 >
@@ -639,7 +644,7 @@ export default function LibraryPage() {
               ))}
             </div>
           ) : !scanning ? (
-            <div className="flex flex-col items-center justify-center py-20 text-on-surface-variant gap-4 bg-surface-container/40 rounded-3xl border border-outline-variant/15">
+            <div className="flex flex-col items-center justify-center py-20 text-on-surface-variant gap-4 bg-surface-container/40 rounded-3xl">
               {activeTab === 'liked' ? (
                 <Heart size={44} className="text-primary/40" />
               ) : activeTab === 'local' ? (
@@ -708,7 +713,7 @@ export default function LibraryPage() {
                 }}
                 className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
                   playlistSourceFilter === pill.id
-                    ? 'bg-primary/20 text-primary border border-primary/40'
+                    ? 'bg-primary/20 text-primary  '
                     : 'bg-surface-container text-on-surface-variant hover:text-on-surface'
                 }`}
               >
@@ -770,7 +775,7 @@ export default function LibraryPage() {
           {showNewPlaylist && (
             <form
               onSubmit={handleCreatePlaylist}
-              className="p-4 rounded-2xl bg-surface-container border border-outline-variant/30 flex flex-wrap gap-3 items-center"
+              className="p-4 rounded-2xl bg-surface-container flex flex-wrap gap-3 items-center"
             >
               <input
                 type="text"
@@ -796,7 +801,7 @@ export default function LibraryPage() {
           {showImportUrl && (
             <form
               onSubmit={handleImportByUrl}
-              className="p-4 rounded-2xl bg-surface-container border border-outline-variant/30 flex flex-wrap gap-3 items-center"
+              className="p-4 rounded-2xl bg-surface-container flex flex-wrap gap-3 items-center"
             >
               <input
                 type="text"
@@ -888,7 +893,7 @@ export default function LibraryPage() {
                 <div
                   key={pl.id}
                   onClick={() => setSelectedPlaylistId(pl.id)}
-                  className="p-4 rounded-2xl bg-surface-container hover:bg-surface-container-high cursor-pointer transition-all flex items-center justify-between gap-3 border border-outline-variant/15"
+                  className="p-4 rounded-2xl bg-surface-container hover:bg-surface-container-high cursor-pointer transition-all flex items-center justify-between gap-3"
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="w-12 h-12 rounded-xl bg-surface-container-highest overflow-hidden shrink-0 flex items-center justify-center">
@@ -968,7 +973,7 @@ export default function LibraryPage() {
       {activeTab === 'spotify' && (
         <div className="space-y-4">
           {!spotifyConnected ? (
-            <div className="p-10 rounded-3xl bg-surface-container/60 border border-outline-variant/20 text-center space-y-4">
+            <div className="p-10 rounded-3xl bg-surface-container/60 text-center space-y-4">
               <Disc3 size={44} className="mx-auto text-emerald-400" />
               <div>
                 <h2 className="text-lg font-black text-on-surface">Spotify не подключён</h2>
@@ -1144,7 +1149,7 @@ export default function LibraryPage() {
       {activeTab === 'ytmusic' && (
         <div className="space-y-4">
           {!ytmConnected ? (
-            <div className="p-10 rounded-3xl bg-surface-container/60 border border-outline-variant/20 text-center space-y-4">
+            <div className="p-10 rounded-3xl bg-surface-container/60 text-center space-y-4">
               <Radio size={44} className="mx-auto text-rose-400" />
               <div>
                 <h2 className="text-lg font-black text-on-surface">YouTube Music не подключён</h2>
@@ -1296,7 +1301,7 @@ export default function LibraryPage() {
           </div>
 
           {scSubTab !== 'charts' && !scConnected ? (
-            <div className="p-10 rounded-3xl bg-surface-container/60 border border-outline-variant/20 text-center space-y-4">
+            <div className="p-10 rounded-3xl bg-surface-container/60 text-center space-y-4">
               <Music2 size={44} className="mx-auto text-orange-400" />
               <div>
                 <h2 className="text-lg font-black text-on-surface">SoundCloud не подключён</h2>

@@ -12,7 +12,7 @@ import {
 } from '../store';
 import type { Track, AudioSourceId } from '../types/electron';
 
-async function resolveTrackStreamUrl(
+async function resolveTrackStreamUrlUncached(
   track: Track,
   forceSource?: AudioSourceId
 ): Promise<{
@@ -80,7 +80,30 @@ async function resolveTrackStreamUrl(
   throw new Error(uni.error || 'Could not resolve valid audio stream');
 }
 
+type ResolvedTrack = Awaited<ReturnType<typeof resolveTrackStreamUrlUncached>>;
+const resolvedTracks = new Map<string, { value: Promise<ResolvedTrack>; expires: number }>();
+async function resolveTrackStreamUrl(track: Track, forceSource?: AudioSourceId): Promise<ResolvedTrack> {
+  if (!forceSource) {
+    const offline = await window.electronAPI.offline?.find(track.id);
+    if (offline) return { url: offline.filePath, badge: 'ОФЛАЙН • На устройстве', actualSource: 'local', lossless: false, switched: false };
+  }
+  if (forceSource || track.source === 'local') return resolveTrackStreamUrlUncached(track, forceSource);
+  const key = `${track.source}:${track.id}:${track.title}:${track.artist}`;
+  const cached = resolvedTracks.get(key);
+  if (cached && cached.expires > Date.now()) return cached.value;
+  const value = resolveTrackStreamUrlUncached(track).catch((error) => {
+    if (resolvedTracks.get(key)?.value === value) resolvedTracks.delete(key);
+    throw error;
+  });
+  if (resolvedTracks.size >= 100) resolvedTracks.delete(resolvedTracks.keys().next().value!);
+  resolvedTracks.set(key, { value, expires: Date.now() + 5 * 60 * 1000 });
+  return value;
+}
+
+let prebufferGeneration = 0;
+let playbackGeneration = 0;
 async function prebufferUpcomingTrackInQueue(): Promise<void> {
+  const generation = ++prebufferGeneration;
   const api = window.electronAPI;
   if (!api) return;
 
@@ -104,6 +127,7 @@ async function prebufferUpcomingTrackInQueue(): Promise<void> {
 
   try {
     const resolved = await resolveTrackStreamUrl(nextTrack);
+    if (generation !== prebufferGeneration) return;
     await api.player.prebufferNext({
       url: resolved.url,
       headers: resolved.headers,
@@ -118,7 +142,7 @@ async function prebufferUpcomingTrackInQueue(): Promise<void> {
       },
     });
   } catch {
-    await api.player.prebufferNext(null);
+    if (generation === prebufferGeneration) await api.player.prebufferNext(null);
   }
 }
 
@@ -151,13 +175,29 @@ export function usePlayer() {
       // Prevent duplicate concurrent play of same track unless explicit forceSource switch
       if (!forceSource && store.loading && store.currentTrack?.id === track.id) return;
 
+      const generation = ++playbackGeneration;
+      ++prebufferGeneration;
       setLoading(true);
       setCurrentTrack(track);
+      // Use the saved cover before asking a CDN; apply artwork only to the current request.
+      void (async () => {
+        const saved = await api.offline?.find(track.id).catch(() => null);
+        if (generation !== playbackGeneration) return;
+        const thumbnail = saved?.track?.thumbnail || track.thumbnail;
+        if (thumbnail && thumbnail !== track.thumbnail) {
+          usePlayerStore.setState(state => ({ currentTrack: state.currentTrack ? { ...state.currentTrack, thumbnail } : null }));
+        }
+        if (ui.dynamicColorFromArt && thumbnail) {
+          const hex = await extractDominantColorFromImage(thumbnail);
+          if (generation === playbackGeneration) useUIStore.getState().setActiveArtColor(hex);
+        }
+      })();
       store.addToHistory(track);
       setResolvedStreamMeta(forceSource ? `Switching to ${forceSource.toUpperCase()}...` : 'Resolving best stream...', track.source, false);
 
       try {
         const resolved = await resolveTrackStreamUrl(track, forceSource);
+        if (generation !== playbackGeneration) return;
         setResolvedStreamMeta(resolved.badge, resolved.actualSource, resolved.lossless);
 
         if (ui.showSmartSwitchToasts && resolved.switched && resolved.switchedReason) {
@@ -180,6 +220,7 @@ export function usePlayer() {
           headers: resolved.headers,
         });
 
+        if (generation !== playbackGeneration) return;
         if (!res.ok) {
           throw new Error(res.error || 'mpv failed to start stream');
         }
@@ -187,13 +228,6 @@ export function usePlayer() {
         setIsPlaying(true);
         setTrackStartTimeSec(Date.now() / 1000);
         if (track.duration) setDuration(track.duration);
-
-        // Adaptive Material You Palette
-        if (ui.dynamicColorFromArt && track.thumbnail) {
-          extractDominantColorFromImage(track.thumbnail).then((hex) => {
-            useUIStore.getState().setActiveArtColor(hex);
-          });
-        }
 
         // Scrobbling & OS Presence + Stats
         const presencePayload = {
@@ -221,12 +255,14 @@ export function usePlayer() {
         // Prebuffer next track for Dual-Deck Smart DJ Automix / Gapless
         setTimeout(() => void prebufferUpcomingTrackInQueue(), 700);
       } catch (err: any) {
+        if (generation !== playbackGeneration) return;
+        resolvedTracks.delete(`${track.source}:${track.id}:${track.title}:${track.artist}`);
         console.error('Playback error:', err);
         useUIStore.getState().pushToast(`Ошибка воспроизведения: ${err?.message || 'Поток недоступен'}`, 'error');
         setResolvedStreamMeta('Stream Unavailable', track.source, false);
         setIsPlaying(false);
       } finally {
-        setLoading(false);
+        if (generation === playbackGeneration) setLoading(false);
       }
     },
     [
@@ -431,6 +467,18 @@ export function usePlayerEvents() {
 
     let lastStatsTick = 0;
 
+    const unsubRecovery = api.player.onRecovery?.((info) => {
+      const store = usePlayerStore.getState();
+      if (store.currentTrack?.id !== info.trackId) return;
+      store.setLoading(info.loading);
+      if (info.error) {
+        store.setIsPlaying(false);
+        useUIStore.getState().pushToast(info.error, 'error');
+      } else if (info.badge && info.source) {
+        store.setResolvedStreamMeta(info.badge, info.source as AudioSourceId, Boolean(info.lossless));
+        store.setIsPlaying(true);
+      }
+    });
     const unsubProgress = api.player.onProgress((info) => {
       const store = usePlayerStore.getState();
       if (!store.isScrubbing) {
@@ -582,6 +630,7 @@ export function usePlayerEvents() {
     window.addEventListener('keydown', onKeyDown);
 
     return () => {
+      unsubRecovery?.();
       unsubProgress();
       unsubEnded();
       unsubAutomix();

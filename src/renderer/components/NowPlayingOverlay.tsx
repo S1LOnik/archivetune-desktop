@@ -499,7 +499,7 @@ export default function NowPlayingOverlay() {
           <span>{speed}x</span>
         </button>
         {showSpeedMenu && (
-          <div className="absolute bottom-10 left-0 bg-surface-container-highest border border-outline-variant/40 rounded-xl p-1.5 shadow-xl z-30 flex flex-col min-w-[90px]">
+          <div className="absolute bottom-10 left-0 bg-surface-container-highest   rounded-xl p-1.5 shadow-xl z-30 flex flex-col min-w-[90px]">
             {SPEED_OPTIONS.map((s) => (
               <button
                 key={s}
@@ -557,7 +557,7 @@ export default function NowPlayingOverlay() {
           </span>
         </button>
         {showSleepMenu && (
-          <div className="absolute bottom-10 left-0 bg-surface-container-highest border border-outline-variant/40 rounded-xl p-1.5 shadow-xl z-30 flex flex-col min-w-[130px]">
+          <div className="absolute bottom-10 left-0 bg-surface-container-highest   rounded-xl p-1.5 shadow-xl z-30 flex flex-col min-w-[130px]">
             {SLEEP_TIMER_OPTIONS.map((opt) => {
               const active =
                 (opt.value === null && sleepTimerRemainingSec === null && !sleepAfterTrack) ||
@@ -750,7 +750,7 @@ export default function NowPlayingOverlay() {
             </button>
           </div>
 
-          <div className="flex items-center justify-between p-4 rounded-2xl bg-surface-container-high/80 border border-outline-variant/20">
+          <div className="flex items-center justify-between p-4 rounded-2xl bg-surface-container-high/80  ">
             <div>
               <p className="text-sm font-bold text-on-surface">
                 Smart DJ Automix (BPM Phrase Sync + Bass Swap)
@@ -771,7 +771,7 @@ export default function NowPlayingOverlay() {
             </button>
           </div>
 
-          <div className="p-4 rounded-2xl bg-surface-container-high/80 border border-outline-variant/20 space-y-4">
+          <div className="p-4 rounded-2xl bg-surface-container-high/80   space-y-4">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="flex items-center gap-3">
                 <span className="text-sm font-bold text-on-surface">
@@ -835,7 +835,7 @@ export default function NowPlayingOverlay() {
             </div>
           </div>
 
-          <div className="p-4 rounded-2xl bg-surface-container-high/80 border border-outline-variant/20 space-y-3 text-xs">
+          <div className="p-4 rounded-2xl bg-surface-container-high/80   space-y-3 text-xs">
             <div className="font-bold text-on-surface text-sm">Audio Effects Pipeline</div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <label className="space-y-1">
@@ -942,7 +942,7 @@ export default function NowPlayingOverlay() {
                   }}
                   className={`group flex items-center gap-3 p-2.5 rounded-xl transition-colors cursor-pointer ${
                     isCurrent
-                      ? 'bg-primary/20 border border-primary/40'
+                      ? 'bg-primary/20  '
                       : 'bg-surface-container/60 hover:bg-surface-container-high'
                   }`}
                 >
@@ -1003,7 +1003,7 @@ export default function NowPlayingOverlay() {
 
     return (
       <div className="flex flex-col h-full overflow-hidden">
-        <div className="flex items-center justify-between pb-3 mb-2 border-b border-white/10 flex-wrap gap-2">
+        <div className="flex items-center justify-between pb-3 mb-2   flex-wrap gap-2">
           <div className="flex items-center gap-2">
             <span className="text-xs font-bold text-on-surface uppercase tracking-wider">
               {variant === 'timecode' ? 'Studio Timecode Lyrics' : 'Lyrics'}
@@ -1032,7 +1032,7 @@ export default function NowPlayingOverlay() {
               onClick={() => setLyricsRomanize(!lyricsRomanize)}
               className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors ${
                 lyricsRomanize
-                  ? 'bg-primary/20 text-primary border border-primary/40'
+                  ? 'bg-primary/20 text-primary  '
                   : 'bg-surface-container-high text-on-surface-variant'
               }`}
             >
@@ -1074,7 +1074,7 @@ export default function NowPlayingOverlay() {
                 </button>
               )}
             </div>
-            <div className="flex items-center gap-0.5 bg-surface-container-high rounded-lg p-0.5 border border-outline-variant/20">
+            <div className="flex items-center gap-0.5 bg-surface-container-high rounded-lg p-0.5  ">
               {(['small', 'medium', 'large'] as const).map((sz) => (
                 <button
                   key={sz}
@@ -1112,11 +1112,11 @@ export default function NowPlayingOverlay() {
                       } hover:blur-none hover:text-white/80`
                   : variant === 'timecode'
                     ? isActive
-                      ? `${activeFontSizes[lyricsFontSize]} bg-cyan-500/15 border-l-4 border-cyan-400 text-cyan-200`
+                      ? `${activeFontSizes[lyricsFontSize]} bg-cyan-500/15   text-cyan-200`
                       : `${fontSizes[lyricsFontSize]} text-on-surface-variant/65 hover:bg-white/5`
                     : variant === 'card'
                       ? isActive
-                        ? `${activeFontSizes[lyricsFontSize]} bg-emerald-500/20 border border-emerald-400/40 text-emerald-200 shadow-lg`
+                        ? `${activeFontSizes[lyricsFontSize]} bg-emerald-500/20   text-emerald-200 shadow-lg`
                         : `${fontSizes[lyricsFontSize]} bg-black/20 text-on-surface-variant/60 hover:text-on-surface`
                       : isActive
                         ? `${activeFontSizes[lyricsFontSize]} text-on-surface bg-white/5 shadow-sm scale-[1.02] origin-left`
@@ -1265,11 +1265,11 @@ export default function NowPlayingOverlay() {
         />
 
         {/* Top Header Bar: ONLY ONE Collapse Button on Left + 8 Style Switcher in Center + Tools on Right */}
-        <div className="relative z-20 flex-shrink-0 flex items-center justify-between px-6 pt-3 pb-2 gap-3 flex-wrap border-b border-white/10 bg-surface-container/60 backdrop-blur-xl">
+        <div className="relative z-20 flex-shrink-0 flex items-center justify-between px-6 pt-3 pb-2 gap-3 flex-wrap   bg-surface-container/60 backdrop-blur-xl">
           <div className="flex items-center gap-2 flex-wrap">
             <button
               onClick={() => setShowNowPlaying(false)}
-              className="px-3.5 py-1.5 rounded-full bg-surface-container-highest hover:bg-primary hover:text-on-primary text-on-surface text-xs font-bold border border-outline-variant/40 transition inline-flex items-center gap-1.5 shadow-sm"
+              className="px-3.5 py-1.5 rounded-full bg-surface-container-highest hover:bg-primary hover:text-on-primary text-on-surface text-xs font-bold   transition inline-flex items-center gap-1.5 shadow-sm"
               title="Свернуть полноэкранный плеер (Esc)"
             >
               <ChevronDown size={15} />
@@ -1277,7 +1277,7 @@ export default function NowPlayingOverlay() {
             </button>
             <button
               onClick={() => setSourceSwitcherTrack(currentTrack)}
-              className="text-[11px] font-bold text-primary uppercase tracking-widest px-2.5 py-1 rounded-full bg-primary/15 border border-primary/30 hover:bg-primary/25 transition inline-flex items-center gap-1.5"
+              className="text-[11px] font-bold text-primary uppercase tracking-widest px-2.5 py-1 rounded-full bg-primary/15   hover:bg-primary/25 transition inline-flex items-center gap-1.5"
               title="Нажмите, чтобы переключить источник (Tidal / Qobuz / Deezer / YTM)"
             >
               <ArrowLeftRight size={11} />
@@ -1285,7 +1285,7 @@ export default function NowPlayingOverlay() {
             </button>
             <button
               onClick={() => setAuditTarget({ track: currentTrack, urlOrPath: currentTrack.path })}
-              className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-surface-container-high/80 text-on-surface-variant hover:text-primary border border-outline-variant/25 transition inline-flex items-center gap-1"
+              className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-surface-container-high/80 text-on-surface-variant hover:text-primary   transition inline-flex items-center gap-1"
               title="Спектральный аудит качества (FFT 4096)"
             >
               <Activity size={11} />
@@ -1293,14 +1293,14 @@ export default function NowPlayingOverlay() {
             </button>
 
             {automixing && (
-              <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 animate-pulse flex items-center gap-1">
+              <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300   animate-pulse flex items-center gap-1">
                 <Disc3 size={12} className="animate-spin" />
                 SMART DJ AUTOMIX
               </span>
             )}
 
             {canvasData && (
-              <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-purple-500/20 text-purple-200 border border-purple-400/30 flex items-center gap-1">
+              <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-purple-500/20 text-purple-200   flex items-center gap-1">
                 <Film size={12} />
                 {canvasData.source}
               </span>
@@ -1308,7 +1308,7 @@ export default function NowPlayingOverlay() {
           </div>
 
           {/* 8 Player Styles Selector Pill */}
-          <div className="flex items-center gap-1 bg-surface-container/80 backdrop-blur-md p-1 rounded-full border border-outline-variant/25 overflow-x-auto max-w-full">
+          <div className="flex items-center gap-1 bg-surface-container/80 backdrop-blur-md p-1 rounded-full   overflow-x-auto max-w-full">
             {PLAYER_STYLES.map((st) => {
               const active = playerStyle === st.id;
               return (
@@ -1333,7 +1333,7 @@ export default function NowPlayingOverlay() {
               onClick={() => setShowDspModal((v) => !v)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
                 showDspModal || eqEnabled || smartDjAutomix
-                  ? 'bg-primary/20 text-primary border border-primary/40'
+                  ? 'bg-primary/20 text-primary  '
                   : 'bg-surface-container-high text-on-surface-variant hover:text-on-surface'
               }`}
               title="DSP Equalizer & Smart DJ Automix"
@@ -1377,7 +1377,7 @@ export default function NowPlayingOverlay() {
             {/* Upper Cinema Stage: Floating Centered Karaoke Lyrics */}
             <div className="flex-1 min-h-0 flex flex-col items-center justify-center text-center px-6">
               {showDspModal || showQueue ? (
-                <div className="w-full max-w-3xl h-full bg-black/65 backdrop-blur-2xl rounded-3xl border border-white/15 p-5 overflow-hidden">
+                <div className="w-full max-w-3xl h-full bg-black/65 backdrop-blur-2xl rounded-3xl   p-5 overflow-hidden">
                   {renderRightDrawerOrLyrics()}
                 </div>
               ) : lyrics.length > 0 ? (
@@ -1404,7 +1404,7 @@ export default function NowPlayingOverlay() {
                 </div>
               ) : (
                 <div className="flex flex-col items-center gap-4">
-                  <div className="w-52 h-52 rounded-3xl overflow-hidden shadow-2xl border border-white/20">
+                  <div className="w-52 h-52 rounded-3xl overflow-hidden shadow-2xl  ">
                     {renderArtworkMedia()}
                   </div>
                 </div>
@@ -1412,10 +1412,10 @@ export default function NowPlayingOverlay() {
             </div>
 
             {/* Bottom Glassmorphic Cinema Control Deck */}
-            <div className="w-full max-w-4xl mx-auto rounded-[32px] bg-black/65 backdrop-blur-2xl border border-white/15 p-5 shadow-2xl space-y-4">
+            <div className="w-full max-w-4xl mx-auto rounded-[32px] bg-black/65 backdrop-blur-2xl   p-5 shadow-2xl space-y-4">
               <div className="flex items-center justify-between gap-4">
                 <div className="flex items-center gap-4 min-w-0">
-                  <div className="w-16 h-16 rounded-2xl overflow-hidden border border-white/20 shrink-0 shadow-lg">
+                  <div className="w-16 h-16 rounded-2xl overflow-hidden   shrink-0 shadow-lg">
                     {renderArtworkMedia()}
                   </div>
                   <div className="min-w-0">
@@ -1455,7 +1455,7 @@ export default function NowPlayingOverlay() {
         {/* STYLE 2: V10 EXPRESSIVE (Material 3 Expressive Squircle Hero + Pill Controls) */}
         {playerStyle === 'v10_expressive' && (
           <div className="relative z-10 flex-1 min-h-0 flex items-center justify-center px-8 py-4 overflow-y-auto">
-            <div className="w-full max-w-2xl flex flex-col items-center gap-4 bg-surface-container/70 backdrop-blur-2xl rounded-[44px] border border-primary/25 p-7 shadow-2xl">
+            <div className="w-full max-w-2xl flex flex-col items-center gap-4 bg-surface-container/70 backdrop-blur-2xl rounded-[44px]   p-7 shadow-2xl">
               <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest px-3 py-1 rounded-full bg-primary/20 text-primary">
                 <Sparkles size={12} /> Material 3 Expressive • V10
               </div>
@@ -1483,7 +1483,7 @@ export default function NowPlayingOverlay() {
               {lyrics.length > 0 && (
                 <div
                   onClick={() => setPlayerStyle('flamingo')}
-                  className="w-full rounded-3xl bg-primary/10 border border-primary/25 px-5 py-3 text-center cursor-pointer hover:bg-primary/15 transition"
+                  className="w-full rounded-3xl bg-primary/10   px-5 py-3 text-center cursor-pointer hover:bg-primary/15 transition"
                   title="Нажмите для полного текста"
                 >
                   <p className="text-base font-extrabold text-on-surface truncate">
@@ -1547,7 +1547,7 @@ export default function NowPlayingOverlay() {
         {playerStyle === 'bitchord' && (
           <div className="relative z-10 flex-1 min-h-0 flex flex-col px-8 py-4 gap-4 overflow-hidden font-mono">
             {/* Top Technical Telemetry Bar */}
-            <div className="flex items-center justify-between px-4 py-2 rounded-xl bg-cyan-950/30 border border-cyan-500/30 text-[11px] text-cyan-300">
+            <div className="flex items-center justify-between px-4 py-2 rounded-xl bg-cyan-950/30   text-[11px] text-cyan-300">
               <div className="flex items-center gap-4">
                 <span className="font-bold text-cyan-400">● BITCHORD STUDIO DECK</span>
                 <span>SRC: {(resolvedSourceBadge || currentTrack.source).toUpperCase()}</span>
@@ -1562,9 +1562,9 @@ export default function NowPlayingOverlay() {
 
             <div className="flex-1 min-h-0 grid grid-cols-12 gap-6 overflow-hidden">
               {/* Left Studio Deck */}
-              <div className="col-span-5 flex flex-col justify-between bg-[#11131c] border border-cyan-500/20 rounded-3xl p-6 shadow-2xl">
+              <div className="col-span-5 flex flex-col justify-between bg-[#11131c]   rounded-3xl p-6 shadow-2xl">
                 <div className="flex items-center gap-5">
-                  <div className="relative w-36 h-36 rounded-2xl overflow-hidden border-2 border-cyan-400/40 shrink-0 shadow-lg">
+                  <div className="relative w-36 h-36 rounded-2xl overflow-hidden   shrink-0 shadow-lg">
                     {renderArtworkMedia()}
                   </div>
                   <div className="min-w-0 space-y-1.5">
@@ -1585,25 +1585,25 @@ export default function NowPlayingOverlay() {
                 <div className="grid grid-cols-4 gap-2 my-2">
                   <button
                     onClick={() => void seek(Math.max(0, position - 10))}
-                    className="py-2 rounded-xl bg-white/5 hover:bg-cyan-500/20 text-cyan-200 text-xs font-bold flex items-center justify-center gap-1 border border-white/10"
+                    className="py-2 rounded-xl bg-white/5 hover:bg-cyan-500/20 text-cyan-200 text-xs font-bold flex items-center justify-center gap-1  "
                   >
                     <Rewind size={13} /> -10s
                   </button>
                   <button
                     onClick={() => void seek(Math.min(duration, position + 10))}
-                    className="py-2 rounded-xl bg-white/5 hover:bg-cyan-500/20 text-cyan-200 text-xs font-bold flex items-center justify-center gap-1 border border-white/10"
+                    className="py-2 rounded-xl bg-white/5 hover:bg-cyan-500/20 text-cyan-200 text-xs font-bold flex items-center justify-center gap-1  "
                   >
                     +10s <FastForward size={13} />
                   </button>
                   <button
                     onClick={() => setDspOption({ pitchSemitones: Math.max(-12, pitchSemitones - 1) })}
-                    className="py-2 rounded-xl bg-white/5 hover:bg-cyan-500/20 text-cyan-200 text-xs font-bold border border-white/10"
+                    className="py-2 rounded-xl bg-white/5 hover:bg-cyan-500/20 text-cyan-200 text-xs font-bold  "
                   >
                     Pitch -1
                   </button>
                   <button
                     onClick={() => setDspOption({ pitchSemitones: Math.min(12, pitchSemitones + 1) })}
-                    className="py-2 rounded-xl bg-white/5 hover:bg-cyan-500/20 text-cyan-200 text-xs font-bold border border-white/10"
+                    className="py-2 rounded-xl bg-white/5 hover:bg-cyan-500/20 text-cyan-200 text-xs font-bold  "
                   >
                     Pitch +1
                   </button>
@@ -1617,7 +1617,7 @@ export default function NowPlayingOverlay() {
               </div>
 
               {/* Right Studio Timecode Lyrics Monitor */}
-              <div className="col-span-7 min-h-0 flex flex-col overflow-hidden bg-[#11131c]/90 rounded-3xl border border-cyan-500/20 p-5">
+              <div className="col-span-7 min-h-0 flex flex-col overflow-hidden bg-[#11131c]/90 rounded-3xl   p-5">
                 {renderRightDrawerOrLyrics('timecode')}
               </div>
             </div>
@@ -1629,7 +1629,7 @@ export default function NowPlayingOverlay() {
           <div className="relative z-10 flex-1 min-h-0 flex items-center justify-center px-8 py-4 overflow-hidden">
             <div className="w-full max-w-6xl h-full grid grid-cols-12 gap-6 overflow-hidden">
               {/* SimpMusic Left Elevated Card */}
-              <div className="col-span-5 bg-[#1b1b22] rounded-[32px] border border-white/10 p-6 shadow-2xl flex flex-col justify-between">
+              <div className="col-span-5 bg-[#1b1b22] rounded-[32px]   p-6 shadow-2xl flex flex-col justify-between">
                 <div className="relative aspect-square max-h-72 mx-auto w-full rounded-2xl overflow-hidden shadow-xl">
                   {renderArtworkMedia()}
                   <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/50 to-transparent p-4 flex items-end justify-between">
@@ -1663,7 +1663,7 @@ export default function NowPlayingOverlay() {
               </div>
 
               {/* SimpMusic Right Tinted Lyrics Card */}
-              <div className="col-span-7 min-h-0 flex flex-col overflow-hidden bg-[#1e2422]/85 backdrop-blur-xl rounded-[32px] border border-emerald-500/25 p-6 shadow-2xl">
+              <div className="col-span-7 min-h-0 flex flex-col overflow-hidden bg-[#1e2422]/85 backdrop-blur-xl rounded-[32px]   p-6 shadow-2xl">
                 {renderRightDrawerOrLyrics('card')}
               </div>
             </div>
@@ -1683,13 +1683,13 @@ export default function NowPlayingOverlay() {
                     scale: coverCompressed ? 0.88 : 1.02,
                   }}
                   transition={{ type: 'spring', stiffness: 180, damping: 20 }}
-                  className="w-72 h-72 rounded-[30px] overflow-hidden shadow-[0_30px_70px_rgba(0,0,0,0.75)] border border-white/25 relative"
+                  className="w-72 h-72 rounded-[30px] overflow-hidden shadow-[0_30px_70px_rgba(0,0,0,0.75)]   relative"
                 >
                   {renderArtworkMedia()}
                 </motion.div>
               </div>
 
-              <div className="w-full bg-white/5 backdrop-blur-2xl rounded-3xl border border-white/15 p-5 space-y-3 shadow-2xl">
+              <div className="w-full bg-white/5 backdrop-blur-2xl rounded-3xl   p-5 space-y-3 shadow-2xl">
                 <div className="flex items-center justify-between">
                   <div className="min-w-0">
                     <span className="text-[10px] font-black uppercase tracking-widest text-primary">
@@ -1721,7 +1721,7 @@ export default function NowPlayingOverlay() {
             >
               <div
                 style={{ transform: 'rotateY(-8deg)' }}
-                className="flex-1 min-h-0 flex flex-col overflow-hidden bg-surface-container/45 backdrop-blur-2xl rounded-[36px] border border-white/15 p-6 shadow-2xl"
+                className="flex-1 min-h-0 flex flex-col overflow-hidden bg-surface-container/45 backdrop-blur-2xl rounded-[36px]   p-6 shadow-2xl"
               >
                 {renderRightDrawerOrLyrics('spatial_3d')}
               </div>
@@ -1733,13 +1733,13 @@ export default function NowPlayingOverlay() {
         {playerStyle === 'tiktok' && (
           <div className="relative z-10 flex-1 min-h-0 flex items-center justify-center gap-6 px-6 py-3 overflow-hidden">
             {/* Vertical 9:16 Cinema Card */}
-            <div className="relative w-[390px] h-full max-h-[760px] rounded-[38px] overflow-hidden shadow-2xl border-2 border-white/15 bg-black flex flex-col justify-between">
+            <div className="relative w-[390px] h-full max-h-[760px] rounded-[38px] overflow-hidden shadow-2xl   bg-black flex flex-col justify-between">
               <div className="absolute inset-0">{renderArtworkMedia()}</div>
               <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-black/25 to-black/90" />
 
               {/* Top pill inside TikTok frame */}
               <div className="relative z-10 flex items-center justify-between p-4">
-                <span className="text-[11px] font-black uppercase tracking-wider px-3 py-1 rounded-full bg-black/60 backdrop-blur-md text-white border border-white/15">
+                <span className="text-[11px] font-black uppercase tracking-wider px-3 py-1 rounded-full bg-black/60 backdrop-blur-md text-white  ">
                   For You • Audio Feed
                 </span>
                 <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-primary/80 text-on-primary">
@@ -1750,7 +1750,7 @@ export default function NowPlayingOverlay() {
               {/* Center-Lower Live Karaoke Caption Overlay */}
               <div className="relative z-10 px-5 my-auto text-center space-y-2">
                 {lyrics.length > 0 && (
-                  <div className="bg-black/55 backdrop-blur-md rounded-2xl p-4 border border-white/10">
+                  <div className="bg-black/55 backdrop-blur-md rounded-2xl p-4  ">
                     <p className="text-lg font-black text-white drop-shadow">
                       {lyrics[activeIndex]?.text || currentTrack.title}
                     </p>
@@ -1777,7 +1777,7 @@ export default function NowPlayingOverlay() {
             </div>
 
             {/* Right Action Rail (TikTok Style Buttons) */}
-            <div className="flex flex-col items-center gap-4 bg-surface-container/70 backdrop-blur-xl p-3 rounded-full border border-white/10">
+            <div className="flex flex-col items-center gap-4 bg-surface-container/70 backdrop-blur-xl p-3 rounded-full  ">
               <button
                 onClick={() => toggleLikeCurrent(currentTrack)}
                 className={`w-12 h-12 rounded-full flex flex-col items-center justify-center transition ${
@@ -1809,7 +1809,7 @@ export default function NowPlayingOverlay() {
                 <Download size={18} />
               </button>
               <div
-                className={`w-12 h-12 rounded-full overflow-hidden border-2 border-primary ${
+                className={`w-12 h-12 rounded-full overflow-hidden   ${
                   isPlaying ? 'animate-spin' : ''
                 }`}
                 style={{ animationDuration: '6s' }}
@@ -1828,12 +1828,12 @@ export default function NowPlayingOverlay() {
               <div className="relative flex items-center justify-center">
                 {playerStyle === 'classic' && (
                   <div
-                    className={`w-64 h-64 rounded-full bg-gradient-to-tr from-zinc-950 via-zinc-800 to-zinc-900 border-4 border-zinc-700/60 shadow-2xl absolute -right-14 flex items-center justify-center ${
+                    className={`w-64 h-64 rounded-full bg-gradient-to-tr from-zinc-950 via-zinc-800 to-zinc-900   shadow-2xl absolute -right-14 flex items-center justify-center ${
                       isPlaying ? 'animate-spin' : ''
                     }`}
                     style={{ animationDuration: '5s' }}
                   >
-                    <div className="w-20 h-20 rounded-full overflow-hidden border-2 border-white/30">
+                    <div className="w-20 h-20 rounded-full overflow-hidden  ">
                       {renderArtworkMedia()}
                     </div>
                   </div>
@@ -1845,7 +1845,7 @@ export default function NowPlayingOverlay() {
                     borderRadius: coverCompressed ? '36px' : '24px',
                   }}
                   transition={{ type: 'spring', stiffness: 320, damping: 24 }}
-                  className="relative z-10 w-72 h-72 overflow-hidden shadow-2xl border border-white/15"
+                  className="relative z-10 w-72 h-72 overflow-hidden shadow-2xl  "
                 >
                   {renderArtworkMedia()}
                   <div className="absolute inset-0 bg-gradient-to-tr from-black/25 via-transparent to-white/10 pointer-events-none" />
@@ -1886,7 +1886,7 @@ export default function NowPlayingOverlay() {
               <AudioVisualizer height={38} className="mt-1 opacity-85" />
             </div>
 
-            <div className="flex-1 min-h-0 flex flex-col overflow-hidden bg-surface-container/40 backdrop-blur-xl rounded-3xl border border-white/10 p-5">
+            <div className="flex-1 min-h-0 flex flex-col overflow-hidden bg-surface-container/40 backdrop-blur-xl rounded-3xl   p-5">
               {renderRightDrawerOrLyrics(playerStyle === 'flamingo' ? 'apple_blur' : 'default')}
             </div>
           </div>
@@ -1895,7 +1895,7 @@ export default function NowPlayingOverlay() {
         {/* Lyrics Share Card Creator Modal */}
         {showShareModal && (
           <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-6">
-            <div className="bg-surface-container-high border border-white/15 rounded-3xl max-w-lg w-full p-6 space-y-5 shadow-2xl">
+            <div className="bg-surface-container-high   rounded-3xl max-w-lg w-full p-6 space-y-5 shadow-2xl">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-lg font-bold text-on-surface">Lyrics Share Card Creator</h3>

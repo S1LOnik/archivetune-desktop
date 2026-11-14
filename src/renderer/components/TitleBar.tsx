@@ -14,14 +14,17 @@ export default function TitleBar() {
 
   return (
     <div
-      className="flex items-center justify-between h-9 px-4 bg-surface-container border-b border-outline-variant/40 flex-shrink-0"
+      className="flex items-center justify-between h-9 px-4 bg-surface-container/70 backdrop-blur-xl flex-shrink-0 select-none z-50"
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
-      <div className="flex items-center gap-2">
-        <span className="text-primary font-black text-sm tracking-wide">🌸 ArchiveTune</span>
+      <div className="flex items-center gap-2.5">
+        <span className="text-primary font-black text-xs tracking-wider flex items-center gap-1.5">
+          <span>🌸</span>
+          <span className="bg-gradient-to-r from-primary to-rose-300 bg-clip-text text-transparent font-extrabold">ArchiveTune</span>
+        </span>
         {!isMiniPipMode && (
-          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-primary/15 text-primary">
-            V2.0 RC
+          <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary tracking-wide">
+            v16.2 RC
           </span>
         )}
       </div>
@@ -32,37 +35,37 @@ export default function TitleBar() {
       >
         <button
           onClick={handleToggleMini}
-          className={`w-7 h-7 rounded-full flex items-center justify-center transition-colors ${
+          className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all ${
             isMiniPipMode
               ? 'bg-primary text-on-primary'
-              : 'hover:bg-surface-container-high text-on-surface-variant hover:text-on-surface'
+              : 'hover:bg-surface-container-highest text-on-surface-variant hover:text-on-surface'
           }`}
-          title={isMiniPipMode ? 'Exit Mini Widget (PiP)' : 'Always-on-Top Mini Widget (PiP)'}
+          title={isMiniPipMode ? 'Выйти из мини-плеера' : 'Мини-плеер поверх окон (PiP)'}
         >
           <PictureInPicture2 size={13} />
         </button>
         <button
           onClick={() => window.electronAPI?.minimize()}
-          className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-surface-container-high text-on-surface-variant hover:text-on-surface transition-colors"
-          title="Minimize"
+          className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-surface-container-highest text-on-surface-variant hover:text-on-surface transition-all"
+          title="Свернуть"
         >
-          <Minus size={14} />
+          <Minus size={13} />
         </button>
         {!isMiniPipMode && (
           <button
             onClick={() => window.electronAPI?.maximize()}
-            className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-surface-container-high text-on-surface-variant hover:text-on-surface transition-colors"
-            title="Maximize"
+            className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-surface-container-highest text-on-surface-variant hover:text-on-surface transition-all"
+            title="Развернуть"
           >
-            <Square size={12} />
+            <Square size={11} />
           </button>
         )}
         <button
           onClick={() => window.electronAPI?.close()}
-          className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-red-500/80 text-on-surface-variant hover:text-white transition-colors"
-          title="Close"
+          className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-red-500/80 text-on-surface-variant hover:text-white transition-all"
+          title="Закрыть"
         >
-          <X size={14} />
+          <X size={13} />
         </button>
       </div>
     </div>

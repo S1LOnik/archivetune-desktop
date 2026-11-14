@@ -57,13 +57,13 @@ export default function StatsPage() {
 
       {/* KPI Summary */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="p-5 rounded-3xl bg-gradient-to-br from-primary/25 to-surface-container border border-primary/30">
+        <div className="p-5 rounded-3xl bg-gradient-to-br from-primary/25 to-surface-container  ">
           <div className="text-xs text-on-surface-variant flex items-center gap-1.5">
             <Flame size={14} className="text-primary" /> Всего прослушиваний
           </div>
           <div className="text-3xl font-black text-on-surface mt-1">{stats.totalPlays || 0}</div>
         </div>
-        <div className="p-5 rounded-3xl bg-surface-container border border-outline-variant/25">
+        <div className="p-5 rounded-3xl bg-surface-container  ">
           <div className="text-xs text-on-surface-variant flex items-center gap-1.5">
             <Clock size={14} className="text-primary" /> Время в музыке
           </div>
@@ -71,7 +71,7 @@ export default function StatsPage() {
             {totalMins >= 60 ? `${Math.floor(totalMins / 60)}ч ${totalMins % 60}м` : `${totalMins} мин`}
           </div>
         </div>
-        <div className="p-5 rounded-3xl bg-surface-container border border-outline-variant/25">
+        <div className="p-5 rounded-3xl bg-surface-container  ">
           <div className="text-xs text-on-surface-variant flex items-center gap-1.5">
             <Trophy size={14} className="text-amber-300" /> Топ исполнитель
           </div>
@@ -82,7 +82,7 @@ export default function StatsPage() {
       </div>
 
       {/* Hourly Heatmap */}
-      <section className="p-5 rounded-3xl bg-surface-container border border-outline-variant/25 space-y-3">
+      <section className="p-5 rounded-3xl bg-surface-container   space-y-3">
         <h2 className="text-sm font-bold text-on-surface">Активность по часам суток</h2>
         <div className="flex items-end gap-1.5 h-32 pt-4">
           {hourly.map((val, hour) => {
@@ -102,7 +102,7 @@ export default function StatsPage() {
       </section>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <section className="p-5 rounded-3xl bg-surface-container border border-outline-variant/25 space-y-3">
+        <section className="p-5 rounded-3xl bg-surface-container   space-y-3">
           <h2 className="text-base font-bold text-on-surface">Топ треки</h2>
           {topTracks.length === 0 ? (
             <p className="text-xs text-on-surface-variant">Послушайте пару треков, чтобы увидеть топ.</p>
@@ -136,7 +136,7 @@ export default function StatsPage() {
           )}
         </section>
 
-        <section className="p-5 rounded-3xl bg-surface-container border border-outline-variant/25 space-y-3">
+        <section className="p-5 rounded-3xl bg-surface-container   space-y-3">
           <h2 className="text-base font-bold text-on-surface">Топ исполнители</h2>
           {topArtists.length === 0 ? (
             <p className="text-xs text-on-surface-variant">Пока недостаточно данных.</p>

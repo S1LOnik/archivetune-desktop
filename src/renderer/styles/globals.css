@@ -2,29 +2,29 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ===== Material You Dynamic Color Tokens (Dark by default) ===== */
+/* ===== Material You Dynamic Color Tokens (ArchiveTune Sakura / Obsidian Theme) ===== */
 :root {
-  --md-primary: #cbb9f5;
-  --md-on-primary: #341e72;
-  --md-primary-container: #4c358a;
-  --md-on-primary-container: #e8ddff;
-  --md-secondary: #ccc2dc;
-  --md-on-secondary: #332d41;
-  --md-secondary-container: #4a4458;
-  --md-on-secondary-container: #e8def8;
-  --md-tertiary: #f0b8c6;
-  --md-on-tertiary: #4a2530;
-  --md-tertiary-container: #633b47;
-  --md-on-tertiary-container: #ffd9e3;
-  --md-surface: #141218;
-  --md-surface-variant: #49454f;
-  --md-on-surface: #e6e1e5;
-  --md-on-surface-variant: #cac4d0;
-  --md-surface-container: #1e1b22;
-  --md-surface-container-high: #2b2831;
-  --md-surface-container-highest: #36343b;
-  --md-outline: #938f99;
-  --md-outline-variant: #49454f;
+  --md-primary: #ff587b;
+  --md-on-primary: #ffffff;
+  --md-primary-container: #470d1e;
+  --md-on-primary-container: #ffd9e2;
+  --md-secondary: #e5bdc5;
+  --md-on-secondary: #432930;
+  --md-secondary-container: #5c3f47;
+  --md-on-secondary-container: #ffd9e2;
+  --md-tertiary: #efa284;
+  --md-on-tertiary: #492816;
+  --md-tertiary-container: #643e2a;
+  --md-on-tertiary-container: #ffdcc8;
+  --md-surface: #0e0d13;
+  --md-surface-variant: #282430;
+  --md-on-surface: #ede8f0;
+  --md-on-surface-variant: #bfb7c7;
+  --md-surface-container: #1a1822;
+  --md-surface-container-high: #24212e;
+  --md-surface-container-highest: #302c3d;
+  --md-outline: #5c5568;
+  --md-outline-variant: #3a3544;
   --md-error: #ffb4ab;
   --md-on-error: #690005;
 }
@@ -34,30 +34,43 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+  border-color: transparent;
 }
 
 html, body, #root {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  font-family: 'Google Sans', 'Noto Sans', system-ui, sans-serif;
+  font-family: 'Google Sans', 'Noto Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   background-color: var(--md-surface);
   color: var(--md-on-surface);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* ===== Scrollbar (thin, matching M3) ===== */
+/* Subtle ambient backdrop for obsidian glass aesthetics */
+body {
+  background:
+    radial-gradient(ellipse 60% 40% at 20% 10%, rgba(255, 88, 123, 0.05) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 50% at 85% 85%, rgba(168, 85, 247, 0.04) 0%, transparent 60%),
+    var(--md-surface);
+}
+
+/* ===== Scrollbar (sleek, minimal M3 Expressive) ===== */
 ::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
+  width: 5px;
+  height: 5px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--md-outline-variant);
-  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 9999px;
+  transition: background 0.2s ease;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.18);
 }
 
 /* ===== Draggable titlebar region ===== */
@@ -70,7 +83,7 @@ html, body, #root {
 
 /* ===== Ripple effect ===== */
 @keyframes ripple {
-  0% { transform: scale(0); opacity: 0.4; }
+  0% { transform: scale(0); opacity: 0.35; }
   100% { transform: scale(4); opacity: 0; }
 }
 .ripple-container {
@@ -82,7 +95,7 @@ html, body, #root {
   border-radius: 50%;
   background: var(--md-primary);
   pointer-events: none;
-  animation: ripple 0.6s linear;
+  animation: ripple 0.6s cubic-bezier(0.2, 0, 0, 1);
 }
 
 /* ===== Lyrics scrolling ===== */
@@ -92,29 +105,64 @@ html, body, #root {
 
 /* ===== Skeleton loading ===== */
 @keyframes skeleton-pulse {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 0.7; }
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.65; }
 }
 .skeleton {
-  animation: skeleton-pulse 1.5s ease-in-out infinite;
+  animation: skeleton-pulse 1.8s ease-in-out infinite;
   background: var(--md-surface-container-high);
-  border-radius: 8px;
+  border-radius: 12px;
 }
 
-/* ===== Now Playing glow ===== */
+/* ===== Ambient glow ===== */
 .now-playing-glow {
-  box-shadow: 0 0 40px -10px var(--md-primary);
+  box-shadow: 0 16px 50px -12px rgba(255, 88, 123, 0.25);
 }
 
-/* ===== Crossfade transition ===== */
-.crossfade-enter {
-  opacity: 0;
+/* ===== Form Controls & Accessibility ===== */
+button, input, select, textarea {
+  font: inherit;
+  border: none;
+  outline: none;
 }
-.crossfade-enter-active {
-  opacity: 1;
-  transition: opacity 300ms ease-in;
+button {
+  -webkit-tap-highlight-color: transparent;
 }
-.crossfade-exit-active {
-  opacity: 0;
-  transition: opacity 300ms ease-out;
+:focus-visible {
+  outline: 2px solid var(--md-primary);
+  outline-offset: 2px;
+}
+
+/* ===== App Layout Polish ===== */
+.app-sidebar {
+  background: rgba(22, 20, 28, 0.85);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  padding: 16px 10px 12px;
+}
+.app-sidebar nav button {
+  min-height: 44px;
+  border-radius: 16px;
+  transition: all 0.15s cubic-bezier(0.2, 0, 0, 1);
+}
+.app-content {
+  background: transparent;
+}
+
+.player-bar {
+  margin: 6px 14px 10px;
+  border-radius: 20px;
+  padding: 10px 16px;
+  background: rgba(26, 24, 34, 0.85);
+  backdrop-filter: blur(32px);
+  -webkit-backdrop-filter: blur(32px);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

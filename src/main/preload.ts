@@ -53,6 +53,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // Dual-Deck mpv Audio Player, Smart Automix, SponsorBlock & DSP
+  playbackCache: {
+    info: () => ipcRenderer.invoke('cache:info'),
+    configure: (limitMB: number) => ipcRenderer.invoke('cache:configure', limitMB),
+    clear: () => ipcRenderer.invoke('cache:clear'),
+  },
+  offline: {
+    list: () => ipcRenderer.invoke('offline:list'),
+    find: (id: string) => ipcRenderer.invoke('offline:find', id),
+    save: (track: unknown) => ipcRenderer.invoke('offline:save', track),
+    remove: (id: string) => ipcRenderer.invoke('offline:remove', id),
+  },
   player: {
     play: (url: string, meta: object) => ipcRenderer.invoke('player:play', url, meta),
     prebufferNext: (nextData: object | null) =>
@@ -79,6 +90,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     auditQuality: (urlOrPath?: string) => ipcRenderer.invoke('player:auditQuality', urlOrPath),
     downloadTrack: (track: object) => ipcRenderer.invoke('player:downloadTrack', track),
     getStatus: () => ipcRenderer.invoke('player:getStatus'),
+    onRecovery: (cb: (info: any) => void) => subscribe('player:recovery', cb),
     onProgress: (cb: (info: any) => void) => subscribe('player:progress', cb),
     onEnded: (cb: () => void) => {
       const listener = () => cb();
@@ -161,6 +173,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Spotify
   spotify: {
+    nativeStatus: () => ipcRenderer.invoke('spotify:nativeStatus'),
+    nativeConnect: () => ipcRenderer.invoke('spotify:nativeConnect'),
+    nativeDisable: () => ipcRenderer.invoke('spotify:nativeDisable'),
     getStatus: () => ipcRenderer.invoke('spotify:getStatus'),
     login: () => ipcRenderer.invoke('spotify:login'),
     connectManual: (spDc: string) => ipcRenderer.invoke('spotify:connectManual', spDc),

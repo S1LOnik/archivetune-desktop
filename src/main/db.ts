@@ -160,6 +160,8 @@ export interface AppSettings {
   // Downloads
   downloadFormat: 'mp3' | 'flac' | 'opus';
   downloadPath: string;
+  playbackCacheMB: number;
+  nativeSpotifyEnabled: boolean;
   embedMetadataAndLyrics: boolean;
 
   // Desktop & Social Integrations
@@ -246,14 +248,14 @@ export interface DatabaseSchema {
 }
 
 export const DEFAULT_SOURCE_ORDER: AudioSourceId[] = [
+  'spotify',
+  'youtube',
+  'soundcloud',
   'tidal',
   'qobuz',
   'deezer',
   'jiosaavn',
-  'youtube',
-  'soundcloud',
   'apple',
-  'spotify',
 ];
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -320,6 +322,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
 
   downloadFormat: 'flac',
   downloadPath: '',
+  playbackCacheMB: 512,
+  nativeSpotifyEnabled: false,
   embedMetadataAndLyrics: true,
 
   closeToTray: false,

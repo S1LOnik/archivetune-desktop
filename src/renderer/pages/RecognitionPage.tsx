@@ -74,7 +74,7 @@ export default function RecognitionPage() {
       </div>
 
       {/* Radar Action Panel */}
-      <div className="p-8 rounded-3xl bg-surface-container border border-outline-variant/25 flex flex-col items-center text-center space-y-5">
+      <div className="p-8 rounded-3xl bg-surface-container   flex flex-col items-center text-center space-y-5">
         <button
           onClick={() => void handleRecognizeLive('system')}
           disabled={Boolean(listening)}
@@ -122,7 +122,7 @@ export default function RecognitionPage() {
         </div>
 
         {lastMatch && (
-          <div className="w-full max-w-md mt-4 p-4 rounded-2xl bg-surface-container-high border border-primary/35 flex items-center gap-4 text-left">
+          <div className="w-full max-w-md mt-4 p-4 rounded-2xl bg-surface-container-high   flex items-center gap-4 text-left">
             <div className="w-16 h-16 rounded-xl overflow-hidden bg-surface-container flex-shrink-0">
               {lastMatch.thumbnail ? (
                 <img src={lastMatch.thumbnail} alt="" className="w-full h-full object-cover" />
@@ -169,7 +169,7 @@ export default function RecognitionPage() {
           {history.map((item) => (
             <div
               key={`${item.id}_${item.timestamp}`}
-              className="flex items-center gap-3 p-3 rounded-2xl bg-surface-container border border-outline-variant/15"
+              className="flex items-center gap-3 p-3 rounded-2xl bg-surface-container  "
             >
               <div className="w-12 h-12 rounded-xl overflow-hidden bg-surface-container-high flex-shrink-0">
                 {item.thumbnail ? (

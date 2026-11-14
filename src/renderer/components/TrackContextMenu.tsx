@@ -83,15 +83,27 @@ export default function TrackContextMenu() {
 
   return (
     <div
-      className="fixed z-[130] w-60 bg-surface-container-highest/95 backdrop-blur-xl border border-outline-variant/40 rounded-2xl shadow-2xl py-1.5 text-xs text-on-surface"
+      className="fixed z-[130] w-60 bg-surface-container-highest/95 backdrop-blur-xl   rounded-2xl shadow-2xl py-1.5 text-xs text-on-surface"
       style={{ left: Math.max(8, clampedX), top: Math.max(8, clampedY) }}
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="px-3 py-1.5 border-b border-outline-variant/20 mb-1">
+      <div className="px-3 py-1.5   mb-1">
         <p className="font-bold truncate">{track.title}</p>
         <p className="text-[11px] text-on-surface-variant truncate">{track.artist}</p>
       </div>
 
+      {track.source !== 'local' && <MenuBtn
+        icon={<Download size={14} />}
+        label="Сохранить офлайн"
+        onClick={async () => {
+          setContextMenu(null);
+          pushToast(`Сохраняю «${track.title}» на устройство…`, 'info');
+          try {
+            const result = await window.electronAPI.offline.save(track);
+            pushToast(result.ok ? 'Трек доступен в Библиотека → Офлайн' : result.error || 'Ошибка сохранения', result.ok ? 'success' : 'error');
+          } catch { pushToast('Не удалось сохранить трек офлайн', 'error'); }
+        }}
+      />}
       <MenuBtn
         icon={<Play size={14} />}
         label="Воспроизвести сейчас"
@@ -134,7 +146,7 @@ export default function TrackContextMenu() {
           onClick={() => setShowPlaylistSub((s) => !s)}
         />
         {showPlaylistSub && (
-          <div className="mx-2 my-1 p-1 rounded-xl bg-surface-container max-h-36 overflow-y-auto space-y-0.5 border border-outline-variant/25">
+          <div className="mx-2 my-1 p-1 rounded-xl bg-surface-container max-h-36 overflow-y-auto space-y-0.5  ">
             {playlists.length === 0 ? (
               <div className="px-2 py-1 text-[11px] text-on-surface-variant">Нет плейлистов</div>
             ) : (
@@ -156,7 +168,7 @@ export default function TrackContextMenu() {
         )}
       </div>
 
-      <div className="my-1 border-t border-outline-variant/20" />
+      <div className="my-1  " />
 
       <MenuBtn
         icon={<ArrowLeftRight size={14} className="text-primary" />}
@@ -195,7 +207,7 @@ export default function TrackContextMenu() {
         />
       )}
 
-      <div className="my-1 border-t border-outline-variant/20" />
+      <div className="my-1  " />
 
       <MenuBtn
         icon={<Activity size={14} />}

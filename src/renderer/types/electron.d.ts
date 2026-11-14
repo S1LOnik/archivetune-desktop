@@ -187,6 +187,8 @@ export interface AppSettings {
   lyricsTranslateLang: string;
   downloadFormat: 'mp3' | 'flac' | 'opus';
   downloadPath: string;
+  playbackCacheMB: number;
+  nativeSpotifyEnabled: boolean;
   embedMetadataAndLyrics: boolean;
   closeToTray: boolean;
   mprisEnabled: boolean;
@@ -253,6 +255,17 @@ declare global {
         exportBackup: () => Promise<{ ok: boolean; filePath?: string }>;
         importBackup: () => Promise<{ ok: boolean; state?: any }>;
       };
+      playbackCache: {
+        info: () => Promise<{ bytes: number; count: number; limitMB: number }>;
+        configure: (limitMB: number) => Promise<{ bytes: number; count: number; limitMB: number }>;
+        clear: () => Promise<{ bytes: number; count: number; limitMB: number }>;
+      };
+      offline: {
+        find: (id: string) => Promise<{ filePath: string; track?: Track } | null>;
+        list: () => Promise<Array<{ track: Track; filePath: string; bytes: number; savedAt: number }>>;
+        save: (track: Track) => Promise<{ ok: boolean; error?: string }>;
+        remove: (id: string) => Promise<{ ok: boolean; error?: string }>;
+      };
       player: {
         play: (url: string, meta: object) => Promise<{ ok: boolean; error?: string }>;
         prebufferNext: (nextData: object | null) => Promise<{ ok: boolean }>;
@@ -275,6 +288,7 @@ declare global {
         auditQuality: (urlOrPath?: string) => Promise<AcousticAuditResult | null>;
         downloadTrack: (track: object) => Promise<{ ok: boolean; filePath?: string; error?: string }>;
         getStatus: () => Promise<any>;
+        onRecovery: (cb: (info: { trackId: string; loading: boolean; error?: string; source?: string; badge?: string; lossless?: boolean }) => void) => () => void;
         onProgress: (cb: (info: any) => void) => () => void;
         onEnded: (cb: () => void) => () => void;
         onAutomixTransition: (cb: (info: { nextTrackId: string }) => void) => () => void;
@@ -327,6 +341,9 @@ declare global {
         onUpdated: (cb: (playlists: PlaylistItem[]) => void) => () => void;
       };
       spotify: {
+        nativeConnect: () => Promise<{ok:boolean;error?:string}>;
+        nativeDisable: () => Promise<{ok:boolean}>;
+        nativeStatus: () => Promise<{ enabled: boolean; connected: boolean; lastError: string; bundled: boolean }>;
         getStatus: () => Promise<{ connected: boolean; user?: any }>;
         login: () => Promise<{ ok: boolean; user?: any; error?: string }>;
         connectManual: (spDc: string) => Promise<{ ok: boolean; user?: any; error?: string }>;

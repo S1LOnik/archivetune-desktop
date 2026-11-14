@@ -52,7 +52,7 @@ export default function ArtistPage() {
         <ArrowLeft size={15} /> Назад
       </button>
 
-      <div className="flex items-center gap-6 bg-surface-container rounded-3xl p-6 border border-outline-variant/25">
+      <div className="flex items-center gap-6 bg-surface-container rounded-3xl p-6  ">
         <div className="w-36 h-36 rounded-full overflow-hidden bg-surface-container-high shadow-xl flex-shrink-0">
           {artist.thumbnail ? (
             <img src={artist.thumbnail} alt={artist.name} className="w-full h-full object-cover" />
@@ -102,7 +102,7 @@ export default function ArtistPage() {
               <div
                 key={`${al.id}_${i}`}
                 onClick={() => navigate(`/album/${encodeURIComponent(al.id)}`)}
-                className="p-3 rounded-2xl bg-surface-container hover:bg-surface-container-high border border-outline-variant/15 cursor-pointer transition"
+                className="p-3 rounded-2xl bg-surface-container hover:bg-surface-container-high   cursor-pointer transition"
               >
                 <div className="aspect-square rounded-xl overflow-hidden bg-surface-container-highest mb-2">
                   {al.thumbnail ? (

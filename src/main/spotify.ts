@@ -19,6 +19,8 @@ import { resolveUniversalStream } from './providers';
 import { SmartDjAutomixManager } from './automix';
 
 function getConfigPath(): string {
+  const electronPath = path.join(os.homedir(), '.config', 'Electron', 'spotify.json');
+  if (fs.existsSync(electronPath)) return electronPath;
   try {
     return path.join(app.getPath('userData'), 'spotify.json');
   } catch {
@@ -388,6 +390,11 @@ async function fetchSpotifyProfileGql(tokenOverride?: string): Promise<{
   return null;
 }
 
+export async function getSpotifyAudioCredentials(): Promise<{ token: string; user?: string } | null> {
+  const token = await getValidSpotifyTokenOrNull();
+  return token ? { token, user: getStoredConfig().user?.id } : null;
+}
+
 async function spotifyApi(endpoint: string, retries = 1): Promise<any> {
   const token = await getValidToken();
   const url = endpoint.startsWith('http') ? endpoint : `https://api.spotify.com/v1${endpoint}`;
@@ -541,6 +548,69 @@ async function fetchLibraryTracksGqlPage(limit = 50, offset = 0): Promise<{
     }
   }
   return { totalCount, tracks };
+}
+
+export async function spotifySearchCandidates(query: string, limit = 5): Promise<any[]> {
+  try {
+    const gqlRes = await spotifyGqlPost('searchDesktop', {
+      searchTerm: query,
+      offset: 0,
+      limit,
+      numberOfTopResults: 3,
+      includeAudiobooks: false,
+      includeArtistHasConcertsField: false,
+      includePreReleases: false,
+      includeLocalConcertsField: false,
+      includeAuthors: false,
+    });
+    const items: any[] = gqlRes?.data?.searchV2?.tracksV2?.items || [];
+    const tracks: any[] = [];
+    for (const it of items) {
+      const parsed = parseGqlTrackNode(it?.item);
+      if (parsed) {
+        tracks.push({
+          id: parsed.id,
+          externalId: parsed.id.replace(/^spotify:/, ''),
+          title: parsed.title,
+          artist: parsed.artist,
+          album: parsed.album,
+          duration: parsed.duration,
+          thumbnail: parsed.thumbnail,
+          source: 'spotify',
+          qualityLabel: 'Каталог Spotify • подбор аудио',
+          codec: 'Vorbis',
+          lossless: false,
+        });
+      }
+    }
+    if (tracks.length > 0) return tracks;
+  } catch {
+    /* fallback to REST */
+  }
+  try {
+    const params = new URLSearchParams({
+      q: query,
+      type: 'track',
+      limit: String(limit),
+    });
+    const data = await spotifyApi(`/search?${params.toString()}`);
+    const items = data?.tracks?.items ?? [];
+    return items.map((track: any) => ({
+      id: `spotify:${track.id}`,
+      externalId: String(track.id),
+      title: track.name,
+      artist: (track.artists || []).map((a: any) => a.name).join(', '),
+      album: track.album?.name,
+      duration: Math.round((track.duration_ms || 0) / 1000),
+      thumbnail: track.album?.images?.[0]?.url,
+      source: 'spotify',
+      qualityLabel: 'Каталог Spotify • подбор аудио',
+      codec: 'Vorbis',
+      lossless: false,
+    }));
+  } catch {
+    return [];
+  }
 }
 
 export function setupSpotifyIPC(): void {

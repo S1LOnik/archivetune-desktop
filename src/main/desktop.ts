@@ -13,6 +13,7 @@ import http from 'http';
 import https from 'https';
 import path from 'path';
 import fs from 'fs';
+import { fileURLToPath } from 'url';
 import { getDb, updateSettings } from './db';
 
 const DISCORD_CLIENT_ID = '1219655712830816306';
@@ -166,7 +167,7 @@ export async function extractPaletteFromArtwork(urlOrPath: string): Promise<{
       const ab = await res.arrayBuffer();
       buf = Buffer.from(ab);
     } else if (urlOrPath.startsWith('file://')) {
-      const clean = urlOrPath.replace(/^file:\/\//, '');
+      const clean = fileURLToPath(urlOrPath);
       if (fs.existsSync(clean)) buf = fs.readFileSync(clean);
     } else if (fs.existsSync(urlOrPath)) {
       buf = fs.readFileSync(urlOrPath);

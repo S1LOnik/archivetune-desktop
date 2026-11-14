@@ -19,6 +19,11 @@ import {
   auditTrackAcousticQuality,
 } from './automix';
 import { getDb, updateSettings } from './db';
+import { resolveUniversalStream } from './providers';
+import { setupOfflineIPC } from './offline';
+import { getPlaybackCache, setupPlaybackCacheIPC } from './playbackCache';
+import { setupNativeSpotifyIPC } from './spotifyNative';
+import { getSpotifyAudioCredentials } from './spotify';
 
 export interface PlayerStatus {
   isPlaying: boolean;
@@ -44,11 +49,14 @@ interface TrackPlayMeta {
   bpm?: number;
   duration?: number;
   source?: string;
+  thumbnail?: string;
+  headers?: Record<string, string>;
 }
 
 interface NextQueueTrackData {
   url: string;
   meta: TrackPlayMeta;
+  headers?: Record<string, string>;
 }
 
 interface DeckInstance {
@@ -67,6 +75,8 @@ interface DeckInstance {
   pendingRequests: Map<number, { resolve: (val: any) => void; timer: NodeJS.Timeout }>;
   nextReqId: number;
   socketBuffer: string;
+  pendingLoad?: (error?: string) => void;
+  prepared?: boolean;
 }
 
 const EQ_BAND_FREQS = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
@@ -127,6 +137,54 @@ class DualDeckMpvPlayer {
   private eqConfig = { enabled: false, bands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], preset: 'Flat' };
 
   private activeMeta: TrackPlayMeta | null = null;
+  private playbackRevision = 0;
+  private recoveryRevision: number | null = null;
+  private prebufferRevision = 0;
+  private failedSources = new Set<string>();
+
+  private notifyRecovery(state: { loading: boolean; error?: string; source?: string; badge?: string; lossless?: boolean }): void {
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+      this.mainWindow.webContents.send('player:recovery', { ...state, trackId: this.activeMeta?.id });
+    }
+  }
+
+  private async recoverStream(revision: number, position: number): Promise<{ ok: boolean; error?: string }> {
+    const meta = this.activeMeta;
+    if (!meta || !meta.title || !meta.artist || meta.source === 'local' || this.recoveryRevision === revision) {
+      if (revision === this.playbackRevision && this.recoveryRevision !== revision) {
+        this.notifyRecovery({ loading: false, error: 'Аудиопоток недоступен' });
+      }
+      return { ok: false, error: 'Audio stream unavailable' };
+    }
+    this.recoveryRevision = revision;
+    this.notifyRecovery({ loading: true });
+    try {
+      this.failedSources.add(meta.source || 'youtube');
+      const replacement = await resolveUniversalStream({
+        id: meta.id, title: meta.title, artist: meta.artist, album: meta.album,
+        duration: meta.duration, source: meta.source || 'youtube',
+      }, undefined, [...this.failedSources]);
+      if (revision !== this.playbackRevision) return { ok: false, error: 'Playback cancelled' };
+      if (!replacement.streamUrl) throw new Error('Доступные источники не смогли восстановить трек');
+      const result = await this.playAttempt(replacement.streamUrl, {
+        ...meta, source: replacement.actualSource, headers: replacement.headers,
+      });
+      if (revision !== this.playbackRevision) return { ok: false, error: 'Playback cancelled' };
+      if (!result.ok) throw new Error(result.error);
+      if (position > 1) await this.seek(position);
+      this.notifyRecovery({ loading: false, source: replacement.actualSource,
+        badge: `${replacement.actualSource.toUpperCase()} • ${replacement.qualityLabel}`, lossless: replacement.lossless });
+      return { ok: true };
+    } catch (error: any) {
+      if (revision === this.playbackRevision) {
+        this.getActiveDeck().paused = true;
+        this.notifyRecovery({ loading: false, error: error.message });
+      }
+      return { ok: false, error: error.message };
+    } finally {
+      if (this.recoveryRevision === revision) this.recoveryRevision = null;
+    }
+  }
   private nextPrepared: NextQueueTrackData | null = null;
   private isAutomixing = false;
   private automixInterval: NodeJS.Timeout | null = null;
@@ -214,6 +272,14 @@ class DualDeckMpvPlayer {
         if (!line.trim()) continue;
         try {
           const parsed = JSON.parse(line);
+          if (parsed.event === 'file-loaded') deck.pendingLoad?.();
+          if (parsed.event === 'end-file' && parsed.reason === 'error') {
+            if (deck.pendingLoad) deck.pendingLoad(parsed.file_error || 'mpv could not open the audio stream');
+            else if (deck === this.getActiveDeck() && !deck.paused && this.recoveryRevision !== this.playbackRevision) {
+              deck.paused = true;
+              void this.recoverStream(this.playbackRevision, deck.position);
+            }
+          }
           if (typeof parsed.request_id === 'number') {
             const req = deck.pendingRequests.get(parsed.request_id);
             if (req) {
@@ -273,6 +339,27 @@ class DualDeckMpvPlayer {
         deck.pendingRequests.delete(reqId);
         resolve(null);
       }
+    });
+  }
+
+  private async loadDeckStream(
+    deck: DeckInstance, url: string, headers?: Record<string, string>
+  ): Promise<void> {
+    await this.sendDeckCommand(deck, ['set_property', 'http-header-fields',
+      Object.entries(headers || {}).map(([name, value]) => `${name}: ${value}`)]);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => finish('Audio stream loading timed out'), 20000);
+      const finish = (error?: string) => {
+        clearTimeout(timer);
+        if (deck.pendingLoad === finish) deck.pendingLoad = undefined;
+        if (error) reject(new Error(error));
+        else resolve();
+      };
+      deck.pendingLoad?.('Playback superseded by another track');
+      deck.pendingLoad = finish;
+      void this.sendDeckCommand(deck, ['loadfile', url, 'replace']).then((result) => {
+        if (result === null) finish('mpv rejected the load command');
+      });
     });
   }
 
@@ -406,19 +493,42 @@ class DualDeckMpvPlayer {
   }
 
   public async play(url: string, meta: TrackPlayMeta): Promise<{ ok: boolean; error?: string }> {
+    const revision = ++this.playbackRevision;
+    ++this.prebufferRevision;
+    getPlaybackCache().cancel();
+    this.failedSources.clear();
+    const result = await this.playAttempt(url, meta);
+    if (result.ok || revision !== this.playbackRevision) return result;
+    return this.recoverStream(revision, 0);
+  }
+
+  private async playAttempt(url: string, meta: TrackPlayMeta): Promise<{ ok: boolean; error?: string }> {
+    const revision = this.playbackRevision;
     try {
       this.cancelAutomix();
       this.currentAnalysis = null;
       this.nextAnalysis = null;
       this.currentPlan = null;
 
-      const active = this.getActiveDeck();
+      let active = this.getActiveDeck();
       const standby = this.getStandbyDeck();
-      if (standby.proc) {
+      const prepared = standby.prepared && standby.currentTrackId === meta.id && standby.currentUrl === url;
+      if (prepared) {
+        await this.sendDeckCommand(active, ['stop']);
+        if (revision !== this.playbackRevision) throw new Error('Playback cancelled');
+        active.paused = true;
+        this.activeDeckId = standby.id;
+        active = standby;
+        active.prepared = false;
+      } else if (standby.proc) {
+        standby.prepared = false;
         await this.sendDeckCommand(standby, ['stop']);
+        if (revision !== this.playbackRevision) throw new Error('Playback cancelled');
       }
+      this.nextPrepared = null;
 
       await this.ensureDeckSpawned(active);
+      if (revision !== this.playbackRevision) throw new Error('Playback cancelled');
       active.currentUrl = url;
       active.currentTrackId = meta.id;
       active.position = 0;
@@ -430,11 +540,16 @@ class DualDeckMpvPlayer {
       this.activeMeta = meta;
 
       await this.sendDeckCommand(active, ['set_property', 'volume', this.masterVolume]);
+      if (revision !== this.playbackRevision) throw new Error('Playback cancelled');
       await this.sendDeckCommand(active, ['set_property', 'speed', this.currentSpeed]);
+      if (revision !== this.playbackRevision) throw new Error('Playback cancelled');
       await this.applyFiltersToDeck(active);
-      await this.sendDeckCommand(active, ['loadfile', url, 'replace']);
+      if (revision !== this.playbackRevision) throw new Error('Playback cancelled');
+      if (!prepared) await this.loadDeckStream(active, url, meta.headers);
+      if (revision !== this.playbackRevision) throw new Error('Playback cancelled');
       // Explicitly unpause immediately after loadfile so network streams start playing without hanging
       await this.sendDeckCommand(active, ['set_property', 'pause', false]);
+      if (revision !== this.playbackRevision) throw new Error('Playback cancelled');
 
       // Background BPM/Spectrum analysis for Automix + SponsorBlock lookup
       if (this.smartDjEnabled) {
@@ -449,19 +564,24 @@ class DualDeckMpvPlayer {
       }
       this.loadSponsorBlockSegments(meta.id).catch(() => {});
       this.startProgressPolling();
+      if (meta.title && meta.artist) getPlaybackCache().schedule({ ...meta, title: meta.title, artist: meta.artist, duration: meta.duration || 0, source: (meta.source || 'youtube') as any }, url, meta.headers);
       return { ok: true };
     } catch (err: any) {
+      if (revision === this.playbackRevision) this.getActiveDeck().paused = true;
       return { ok: false, error: err?.message || 'mpv play error' };
     }
   }
 
   public async prebufferNext(nextData: NextQueueTrackData | null): Promise<{ ok: boolean }> {
+    const revision = ++this.prebufferRevision;
     this.nextPrepared = nextData;
     this.nextAnalysis = null;
     if (!nextData || !getDb().settings.prebufferNextTrack) return { ok: true };
 
     const standby = this.getStandbyDeck();
     await this.ensureDeckSpawned(standby);
+    if (revision !== this.prebufferRevision) return { ok: false };
+    standby.prepared = false;
     standby.currentUrl = nextData.url;
     standby.currentTrackId = nextData.meta.id;
     standby.paused = true;
@@ -469,8 +589,12 @@ class DualDeckMpvPlayer {
     standby.lowpassHz = undefined;
 
     await this.sendDeckCommand(standby, ['set_property', 'pause', true]);
+    if (revision !== this.prebufferRevision) return { ok: false };
     await this.sendDeckCommand(standby, ['set_property', 'volume', 0]);
-    await this.sendDeckCommand(standby, ['loadfile', nextData.url, 'replace']);
+    if (revision !== this.prebufferRevision) return { ok: false };
+    await this.loadDeckStream(standby, nextData.url, nextData.headers);
+    if (revision !== this.prebufferRevision) return { ok: false };
+    if (this.nextPrepared === nextData && standby.currentUrl === nextData.url) standby.prepared = true;
 
     if (this.smartDjEnabled) {
       analyzeAudioForAutomix(nextData.meta.id, nextData.url, nextData.meta.duration || 180)
@@ -699,6 +823,8 @@ class DualDeckMpvPlayer {
   }
 
   public async pause(): Promise<void> {
+    ++this.playbackRevision;
+    ++this.prebufferRevision;
     this.cancelAutomix();
     const d = this.getActiveDeck();
     d.paused = true;
@@ -712,6 +838,9 @@ class DualDeckMpvPlayer {
   }
 
   public async stop(): Promise<void> {
+    getPlaybackCache().cancel();
+    ++this.playbackRevision;
+    ++this.prebufferRevision;
     this.cancelAutomix();
     for (const id of ['A', 'B'] as const) {
       const d = this.decks[id];
@@ -888,6 +1017,9 @@ class DualDeckMpvPlayer {
 export const playerInstance = new DualDeckMpvPlayer();
 
 export function setupPlayerIPC(win?: BrowserWindow): void {
+  setupOfflineIPC(track => resolveUniversalStream(track));
+  setupPlaybackCacheIPC();
+  setupNativeSpotifyIPC(getSpotifyAudioCredentials);
   if (win) playerInstance.setWindow(win);
   ipcMain.handle('player:play', (_e, url: string, meta: TrackPlayMeta) => playerInstance.play(url, meta));
   ipcMain.handle('player:prebufferNext', (_e, nextData: NextQueueTrackData | null) => playerInstance.prebufferNext(nextData));

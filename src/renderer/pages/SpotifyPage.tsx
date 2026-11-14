@@ -131,13 +131,13 @@ export default function SpotifyPage() {
         </div>
 
         {errorMessage && (
-          <div className="flex items-center gap-2 p-3 bg-error/20 border border-error/30 text-error rounded-xl text-xs">
+          <div className="flex items-center gap-2 p-3 bg-error/20   text-error rounded-xl text-xs">
             <AlertCircle size={16} />
             <span>{errorMessage}</span>
           </div>
         )}
 
-        <div className="bg-surface-container rounded-2xl p-6 space-y-4 border border-outline-variant/30">
+        <div className="bg-surface-container rounded-2xl p-6 space-y-4  ">
           <button
             onClick={() => loginMutation.mutate()}
             disabled={loginMutation.isPending}
@@ -148,9 +148,9 @@ export default function SpotifyPage() {
           </button>
 
           <div className="relative flex py-2 items-center">
-            <div className="flex-grow border-t border-outline-variant/30" />
+            <div className="flex-grow  " />
             <span className="flex-shrink mx-4 text-xs text-on-surface-variant">or</span>
-            <div className="flex-grow border-t border-outline-variant/30" />
+            <div className="flex-grow  " />
           </div>
 
           {!showManualCookie ? (
@@ -177,7 +177,7 @@ export default function SpotifyPage() {
                   value={spDcInput}
                   onChange={(e) => setSpDcInput(e.target.value)}
                   placeholder="AQB... (sp_dc cookie) or BQ... (access token)"
-                  className="w-full px-3 py-2 text-sm rounded-xl bg-surface-container-high text-on-surface border border-outline-variant/30 focus:outline-none focus:ring-1 focus:ring-primary"
+                  className="w-full px-3 py-2 text-sm rounded-xl bg-surface-container-high text-on-surface   focus:outline-none focus:ring-1 focus:ring-primary"
                 />
                 <p className="text-[11px] text-on-surface-variant/70 mt-1.5">
                   You can paste your <code className="text-primary font-mono">sp_dc</code> cookie from browser Developer Tools (Application &rarr; Cookies &rarr; https://open.spotify.com) or a direct Bearer access token.
@@ -221,7 +221,7 @@ export default function SpotifyPage() {
   return (
     <div className="p-6 space-y-6 pb-20">
       {/* Profile Bar */}
-      <div className="flex items-center justify-between p-4 rounded-2xl bg-surface-container border border-outline-variant/30">
+      <div className="flex items-center justify-between p-4 rounded-2xl bg-surface-container  ">
         <div className="flex items-center gap-3">
           {status.user?.avatarUrl ? (
             <img src={status.user.avatarUrl} alt="" className="w-12 h-12 rounded-full object-cover ring-2 ring-[#1DB954]" />
@@ -299,7 +299,7 @@ export default function SpotifyPage() {
       ) : (
         /* Tabs: Liked Songs vs Playlists */
         <div className="space-y-4">
-          <div className="flex items-center gap-3 border-b border-outline-variant/30 pb-3">
+          <div className="flex items-center gap-3   pb-3">
             <button
               onClick={() => setActiveTab('liked')}
               className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition-all ${

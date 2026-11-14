@@ -89,10 +89,10 @@ export default function ExplorePage() {
               <button
                 key={m.title}
                 onClick={() => void handleSelectMood(m)}
-                className={`px-4 py-2 rounded-2xl text-xs font-bold border transition ${
+                className={`px-4 py-2 rounded-2xl text-xs font-bold  transition ${
                   selectedMood === m.title
-                    ? 'bg-primary text-on-primary border-primary'
-                    : 'bg-surface-container-high text-on-surface border-outline-variant/25 hover:bg-surface-container-highest'
+                    ? 'bg-primary text-on-primary '
+                    : 'bg-surface-container-high text-on-surface  hover:bg-surface-container-highest'
                 }`}
               >
                 {m.title}
@@ -100,7 +100,7 @@ export default function ExplorePage() {
             ))}
           </div>
           {selectedMood && activeGenreTracks.length > 0 && (
-            <div className="mt-4 bg-surface-container rounded-2xl p-3 border border-outline-variant/20 space-y-1">
+            <div className="mt-4 bg-surface-container rounded-2xl p-3 space-y-1">
               <div className="flex items-center justify-between px-2 py-1">
                 <span className="text-xs font-bold text-primary">Подборка: {selectedMood}</span>
                 <button
@@ -129,7 +129,7 @@ export default function ExplorePage() {
               <div
                 key={`${rel.id}_${idx}`}
                 onClick={() => navigate(`/album/${encodeURIComponent(rel.id)}`)}
-                className="group p-3 rounded-2xl bg-surface-container hover:bg-surface-container-high border border-outline-variant/15 cursor-pointer transition"
+                className="group p-3 rounded-2xl bg-surface-container hover:bg-surface-container-high cursor-pointer transition"
               >
                 <div className="aspect-square rounded-xl overflow-hidden bg-surface-container-highest mb-2.5">
                   {rel.thumbnail ? (
@@ -152,7 +152,7 @@ export default function ExplorePage() {
 
       {/* Two columns: YTM Charts + Shazam Global Top */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <section className="bg-surface-container rounded-3xl p-4 border border-outline-variant/20 space-y-2">
+        <section className="bg-surface-container rounded-3xl p-4 space-y-2">
           <div className="flex items-center justify-between px-2 pb-1">
             <h2 className="text-base font-bold text-on-surface flex items-center gap-2">
               <Flame size={17} className="text-red-400" /> Глобальные чарты YTM
@@ -175,7 +175,7 @@ export default function ExplorePage() {
           )}
         </section>
 
-        <section className="bg-surface-container rounded-3xl p-4 border border-outline-variant/20 space-y-2">
+        <section className="bg-surface-container rounded-3xl p-4 space-y-2">
           <div className="flex items-center justify-between px-2 pb-1">
             <h2 className="text-base font-bold text-on-surface flex items-center gap-2">
               <AudioLines size={17} className="text-sky-400" /> Shazam Global Top

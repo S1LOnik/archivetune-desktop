@@ -30,7 +30,7 @@ export default function AcousticAuditModal() {
       onClick={() => setAuditTarget(null)}
     >
       <div
-        className="w-full max-w-lg bg-surface-container border border-outline-variant/40 rounded-3xl shadow-2xl p-6 space-y-4"
+        className="w-full max-w-lg bg-surface-container   rounded-3xl shadow-2xl p-6 space-y-4"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3">
@@ -62,12 +62,12 @@ export default function AcousticAuditModal() {
         ) : (
           <div className="space-y-4">
             <div
-              className={`p-4 rounded-2xl border flex items-center gap-3 ${
+              className={`p-4 rounded-2xl  flex items-center gap-3 ${
                 isLosslessOk
-                  ? 'bg-emerald-500/10 border-emerald-400/35 text-emerald-200'
+                  ? 'bg-emerald-500/10  text-emerald-200'
                   : isFake
-                  ? 'bg-amber-500/15 border-amber-400/40 text-amber-200'
-                  : 'bg-surface-container-high border-outline-variant/30 text-on-surface'
+                  ? 'bg-amber-500/15  text-amber-200'
+                  : 'bg-surface-container-high  text-on-surface'
               }`}
             >
               {isFake ? (

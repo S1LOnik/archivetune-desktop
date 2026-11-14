@@ -46,8 +46,8 @@ export default function QueueDrawer() {
   };
 
   return (
-    <aside className="w-80 flex-shrink-0 border-l border-outline-variant/25 bg-surface-container/95 backdrop-blur-xl flex flex-col h-full">
-      <div className="px-4 py-3 border-b border-outline-variant/20 flex items-center justify-between">
+    <aside className="w-80 flex-shrink-0   bg-surface-container/95 backdrop-blur-xl flex flex-col h-full">
+      <div className="px-4 py-3   flex items-center justify-between">
         <div className="flex items-center gap-2">
           <ListMusic size={17} className="text-primary" />
           <h3 className="text-sm font-bold text-on-surface">
@@ -80,7 +80,7 @@ export default function QueueDrawer() {
 
       {/* Live Smart DJ Automix Plan Card */}
       {smartDjAutomix && automixPlan && (
-        <div className="mx-3 mt-3 p-3 rounded-2xl bg-primary/10 border border-primary/30 text-xs space-y-1">
+        <div className="mx-3 mt-3 p-3 rounded-2xl bg-primary/10   text-xs space-y-1">
           <div className="flex items-center justify-between font-bold text-primary">
             <span className="flex items-center gap-1.5">
               <Disc3 size={14} /> Smart DJ AutoMix
@@ -112,8 +112,8 @@ export default function QueueDrawer() {
                 key={`${track.id}_${idx}`}
                 className={`group flex items-center gap-2.5 p-2 rounded-xl transition cursor-pointer ${
                   isActive
-                    ? 'bg-primary/15 border border-primary/35'
-                    : 'hover:bg-surface-container-high border border-transparent'
+                    ? 'bg-primary/15  '
+                    : 'hover:bg-surface-container-high  '
                 }`}
                 onClick={() => void playFromQueue(queue, idx)}
               >
@@ -166,7 +166,7 @@ export default function QueueDrawer() {
       </div>
 
       {smartDjAutomix && queue[queueIndex + 1] && (
-        <div className="px-3 py-2 border-t border-outline-variant/20 text-[11px] text-on-surface-variant flex items-center gap-1.5">
+        <div className="px-3 py-2   text-[11px] text-on-surface-variant flex items-center gap-1.5">
           <Sparkles size={12} className="text-primary flex-shrink-0" />
           <span className="truncate">Далее: {queue[queueIndex + 1].title}</span>
         </div>

@@ -5,14 +5,14 @@ import { usePlayer } from '../lib/usePlayer';
 import type { MultiTrackCandidate, AudioSourceId } from '../types/electron';
 
 const SOURCE_COLORS: Record<string, string> = {
-  tidal: 'bg-cyan-500/20 text-cyan-300 border-cyan-400/30',
-  qobuz: 'bg-indigo-500/20 text-indigo-300 border-indigo-400/30',
-  deezer: 'bg-purple-500/20 text-purple-300 border-purple-400/30',
-  jiosaavn: 'bg-emerald-500/20 text-emerald-300 border-emerald-400/30',
-  youtube: 'bg-red-500/20 text-red-300 border-red-400/30',
-  soundcloud: 'bg-orange-500/20 text-orange-300 border-orange-400/30',
-  apple: 'bg-pink-500/20 text-pink-300 border-pink-400/30',
-  spotify: 'bg-green-500/20 text-green-300 border-green-400/30',
+  tidal: 'bg-cyan-500/20 text-cyan-300 ',
+  qobuz: 'bg-indigo-500/20 text-indigo-300 ',
+  deezer: 'bg-purple-500/20 text-purple-300 ',
+  jiosaavn: 'bg-emerald-500/20 text-emerald-300 ',
+  youtube: 'bg-red-500/20 text-red-300 ',
+  soundcloud: 'bg-orange-500/20 text-orange-300 ',
+  apple: 'bg-pink-500/20 text-pink-300 ',
+  spotify: 'bg-green-500/20 text-green-300 ',
 };
 
 function fmtDur(sec: number) {
@@ -83,7 +83,7 @@ export default function SourceSwitcherModal() {
     await playTrack(targetTrack, cand.source as AudioSourceId);
   };
 
-  const quickSources: AudioSourceId[] = ['tidal', 'qobuz', 'deezer', 'youtube', 'jiosaavn', 'soundcloud'];
+  const quickSources: AudioSourceId[] = ['spotify', 'youtube', 'soundcloud', 'tidal', 'qobuz', 'deezer', 'jiosaavn'];
 
   return (
     <div
@@ -91,10 +91,10 @@ export default function SourceSwitcherModal() {
       onClick={() => setSourceSwitcherTrack(null)}
     >
       <div
-        className="w-full max-w-2xl bg-surface-container border border-outline-variant/40 rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[82vh]"
+        className="w-full max-w-2xl bg-surface-container   rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[82vh]"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="px-6 py-4 border-b border-outline-variant/20 flex items-center justify-between">
+        <div className="px-6 py-4   flex items-center justify-between">
           <div>
             <h2 className="text-base font-bold text-on-surface flex items-center gap-2">
               <Sparkles size={17} className="text-primary" />
@@ -123,15 +123,15 @@ export default function SourceSwitcherModal() {
         </div>
 
         {/* Smart Auto-Switch Bar + Instant force-source buttons */}
-        <div className="px-6 py-3 bg-surface-container-high/70 border-b border-outline-variant/15 flex flex-col gap-2.5">
+        <div className="px-6 py-3 bg-surface-container-high/70   flex flex-col gap-2.5">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setAutoUpgradeLossless(!autoUpgradeLossless)}
-                className={`px-3 py-1 rounded-xl text-xs font-bold border transition ${
+                className={`px-3 py-1 rounded-xl text-xs font-bold  transition ${
                   autoUpgradeLossless
-                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40'
-                    : 'bg-surface-container text-on-surface-variant border-outline-variant/30'
+                    ? 'bg-emerald-500/20 text-emerald-300 '
+                    : 'bg-surface-container text-on-surface-variant '
                 }`}
               >
                 {autoUpgradeLossless ? '✓ Авто-выбор лучшего ВКЛ' : 'Авто-выбор лучшего ВЫКЛ'}
@@ -177,8 +177,8 @@ export default function SourceSwitcherModal() {
                   setSourceSwitcherTrack(null);
                   void playTrack(sourceSwitcherTrack, src);
                 }}
-                className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border transition hover:brightness-110 ${
-                  SOURCE_COLORS[src] || 'bg-surface-container text-on-surface border-outline-variant/30'
+                className={`px-2.5 py-1 rounded-full text-[11px] font-semibold  transition hover:brightness-110 ${
+                  SOURCE_COLORS[src] || 'bg-surface-container text-on-surface '
                 }`}
               >
                 {src.toUpperCase()}
@@ -209,7 +209,7 @@ export default function SourceSwitcherModal() {
                 <button
                   key={`${cand.source}:${cand.id}`}
                   onClick={() => void handleSelectCandidate(cand)}
-                  className="w-full text-left flex items-center gap-3 p-3 rounded-2xl bg-surface-container-high/60 hover:bg-surface-container-highest border border-outline-variant/20 transition group"
+                  className="w-full text-left flex items-center gap-3 p-3 rounded-2xl bg-surface-container-high/60 hover:bg-surface-container-highest   transition group"
                 >
                   <div className="w-11 h-11 rounded-xl overflow-hidden bg-surface-container flex-shrink-0">
                     {cand.thumbnail ? (
@@ -221,7 +221,7 @@ export default function SourceSwitcherModal() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold  ${
                           SOURCE_COLORS[cand.source] || 'bg-surface-container text-on-surface'
                         }`}
                       >

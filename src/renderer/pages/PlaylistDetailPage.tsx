@@ -69,7 +69,7 @@ export default function PlaylistDetailPage() {
         <ArrowLeft size={15} /> Назад
       </button>
 
-      <div className="flex flex-col sm:flex-row gap-6 items-start sm:items-end bg-surface-container rounded-3xl p-6 border border-outline-variant/25">
+      <div className="flex flex-col sm:flex-row gap-6 items-start sm:items-end bg-surface-container rounded-3xl p-6  ">
         <div className="w-40 h-40 rounded-2xl overflow-hidden bg-surface-container-high shadow-xl flex-shrink-0">
           {thumbnail ? (
             <img src={thumbnail} alt={title} className="w-full h-full object-cover" />

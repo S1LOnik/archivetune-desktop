@@ -1,3 +1,4 @@
+import CacheSettings from '../components/CacheSettings';
 import React, { useState, useEffect } from 'react';
 import {
   Palette,
@@ -293,7 +294,7 @@ export default function SettingsPage() {
       </div>
 
       {/* Category Filter Tabs */}
-      <div className="flex items-center gap-1.5 flex-wrap bg-surface-container p-1.5 rounded-2xl border border-outline-variant/25">
+      <div className="flex items-center gap-1.5 flex-wrap bg-surface-container p-1.5 rounded-2xl">
         {[
           { id: 'all', label: 'Все настройки' },
           { id: 'sources', label: 'Мульти-Сорс & Синхронизация' },
@@ -318,7 +319,7 @@ export default function SettingsPage() {
 
       {/* 1. Theme, UI Scale, Visualizer & Player Styles */}
       {(settingsCategory === 'all' || settingsCategory === 'ui') && (
-      <section className="bg-surface-container rounded-2xl p-5 space-y-5 border border-outline-variant/30">
+      <section className="bg-surface-container rounded-2xl p-5 space-y-5">
         <div className="flex items-center gap-3">
           <Palette className="text-primary" size={22} />
           <div>
@@ -444,10 +445,10 @@ export default function SettingsPage() {
                 <button
                   key={st.id}
                   onClick={() => setPlayerStyle(st.id)}
-                  className={`text-left p-3 rounded-xl border transition-all ${
+                  className={`text-left p-3 rounded-xl  transition-all ${
                     active
-                      ? 'bg-primary/15 border-primary text-on-surface'
-                      : 'bg-surface-container-high border-transparent text-on-surface-variant hover:text-on-surface'
+                      ? 'bg-primary/15  text-on-surface'
+                      : 'bg-surface-container-high  text-on-surface-variant hover:text-on-surface'
                   }`}
                 >
                   <p className="text-xs font-bold text-on-surface">{st.name}</p>
@@ -490,7 +491,7 @@ export default function SettingsPage() {
 
       {/* 2. Audio Engine, Output Device, AutoMix & DSP */}
       {(settingsCategory === 'all' || settingsCategory === 'audio') && (
-      <section className="bg-surface-container rounded-2xl p-5 space-y-5 border border-outline-variant/30">
+      <section className="bg-surface-container rounded-2xl p-5 space-y-5">
         <div className="flex items-center gap-3">
           <Volume2 className="text-primary" size={22} />
           <div>
@@ -511,7 +512,7 @@ export default function SettingsPage() {
           <select
             value={audioDevice || 'auto'}
             onChange={(e) => void handleAudioDeviceChange(e.target.value)}
-            className="w-full bg-surface-container-high border border-outline-variant/30 rounded-xl px-3.5 py-2.5 text-xs font-semibold text-on-surface outline-none"
+            className="w-full bg-surface-container-high rounded-xl px-3.5 py-2.5 text-xs font-semibold text-on-surface outline-none"
           >
             <option value="auto">По умолчанию (Auto PipeWire / PulseAudio)</option>
             {audioDevices.map((dev) => (
@@ -530,10 +531,10 @@ export default function SettingsPage() {
               <button
                 key={m.id}
                 onClick={() => setAutomixMode(m.id)}
-                className={`p-2.5 rounded-xl text-left border transition-all ${
+                className={`p-2.5 rounded-xl text-left  transition-all ${
                   automixMode === m.id
-                    ? 'bg-primary/15 border-primary'
-                    : 'bg-surface-container-high border-transparent hover:border-outline-variant/40'
+                    ? 'bg-primary/15 '
+                    : 'bg-surface-container-high  '
                 }`}
               >
                 <p className="text-xs font-bold text-on-surface">{m.label}</p>
@@ -659,7 +660,7 @@ export default function SettingsPage() {
         </div>
 
         {/* 10-Band Parametric Equalizer directly in Settings */}
-        <div className="p-4 rounded-2xl bg-surface-container-high space-y-4 border border-outline-variant/20">
+        <div className="p-4 rounded-2xl bg-surface-container-high space-y-4">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div className="flex items-center gap-3">
               <Sliders size={18} className="text-primary" />
@@ -722,7 +723,7 @@ export default function SettingsPage() {
 
       {/* 3. Multi-Source & Smart Routing + Unified Library Sync */}
       {(settingsCategory === 'all' || settingsCategory === 'sources') && (
-      <section className="bg-surface-container rounded-2xl p-5 space-y-4 border border-outline-variant/30">
+      <section className="bg-surface-container rounded-2xl p-5 space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-3">
             <Radio className="text-primary" size={22} />
@@ -825,10 +826,10 @@ export default function SettingsPage() {
                 <button
                   key={src}
                   onClick={() => toggleSourceEnabled(src, !active)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition ${
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold  transition ${
                     active
-                      ? 'bg-emerald-500/15 text-emerald-300 border-emerald-400/40'
-                      : 'bg-surface-container-high text-on-surface-variant border-transparent opacity-60'
+                      ? 'bg-emerald-500/15 text-emerald-300 '
+                      : 'bg-surface-container-high text-on-surface-variant  opacity-60'
                   }`}
                 >
                   {src.toUpperCase()}: {active ? 'ВКЛ' : 'ВЫКЛ'}
@@ -839,7 +840,7 @@ export default function SettingsPage() {
         </div>
 
         {/* Unified Library Sync Toggles */}
-        <div className="pt-2 border-t border-outline-variant/20 space-y-2.5">
+        <div className="pt-2 space-y-2.5">
           <p className="text-xs font-bold text-on-surface">
             Общая медиатека (авто-объединение Любимых треков и Плейлистов со всех платформ):
           </p>
@@ -867,7 +868,7 @@ export default function SettingsPage() {
 
       {/* 4. Lyrics, Canvas & AI Content Filter */}
       {(settingsCategory === 'all' || settingsCategory === 'lyrics') && (
-      <section className="bg-surface-container rounded-2xl p-5 space-y-4 border border-outline-variant/30">
+      <section className="bg-surface-container rounded-2xl p-5 space-y-4">
         <div className="flex items-center gap-3">
           <Sparkles className="text-primary" size={22} />
           <div>
@@ -946,7 +947,7 @@ export default function SettingsPage() {
 
       {/* 5. SponsorBlock */}
       {(settingsCategory === 'all' || settingsCategory === 'lyrics') && (
-      <section className="bg-surface-container rounded-2xl p-5 space-y-4 border border-outline-variant/30">
+      <section className="bg-surface-container rounded-2xl p-5 space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Shield className="text-primary" size={22} />
@@ -973,7 +974,7 @@ export default function SettingsPage() {
                 key={cat.id}
                 onClick={() => handleToggleSbCategory(cat.id)}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold ${
-                  active ? 'bg-primary/20 text-primary border border-primary/40' : 'bg-surface-container-high text-on-surface-variant'
+                  active ? 'bg-primary/20 text-primary  ' : 'bg-surface-container-high text-on-surface-variant'
                 }`}
               >
                 {active && <Check size={12} />}
@@ -985,9 +986,11 @@ export default function SettingsPage() {
       </section>
       )}
 
+      {(settingsCategory === 'all' || settingsCategory === 'system') && <CacheSettings />}
+
       {/* 6. Desktop, Local HTTP API & Scrobbling */}
       {(settingsCategory === 'all' || settingsCategory === 'system') && (
-      <section className="bg-surface-container rounded-2xl p-5 space-y-5 border border-outline-variant/30">
+      <section className="bg-surface-container rounded-2xl p-5 space-y-5">
         <div className="flex items-center gap-3">
           <Monitor className="text-primary" size={22} />
           <div>
@@ -1018,7 +1021,7 @@ export default function SettingsPage() {
           ))}
         </div>
 
-        <form onSubmit={handleSaveScrobble} className="space-y-3 pt-2 border-t border-outline-variant/20">
+        <form onSubmit={handleSaveScrobble} className="space-y-3 pt-2">
           <p className="text-xs font-bold text-on-surface-variant">Last.fm &amp; ListenBrainz API</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <input
@@ -1062,7 +1065,7 @@ export default function SettingsPage() {
 
       {/* 7. Downloads & Full Backup / Restore */}
       {(settingsCategory === 'all' || settingsCategory === 'system') && (
-      <section className="bg-surface-container rounded-2xl p-5 space-y-4 border border-outline-variant/30">
+      <section className="bg-surface-container rounded-2xl p-5 space-y-4">
         <div className="flex items-center gap-3">
           <Download className="text-primary" size={22} />
           <div>
@@ -1111,7 +1114,7 @@ export default function SettingsPage() {
         </div>
 
         {/* Keyboard Shortcuts Reference */}
-        <div className="pt-3 border-t border-outline-variant/20 space-y-2">
+        <div className="pt-3 space-y-2">
           <p className="text-xs font-bold text-on-surface">Горячие клавиши плеера:</p>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] text-on-surface-variant">
             <div className="p-2 rounded-lg bg-surface-container-high"><strong className="text-primary">Space</strong> — Пауза / Старт</div>
@@ -1127,7 +1130,7 @@ export default function SettingsPage() {
       )}
 
       {/* About */}
-      <section className="bg-surface-container rounded-2xl p-5 flex items-center justify-between flex-wrap gap-4 border border-outline-variant/30">
+      <section className="bg-surface-container rounded-2xl p-5 flex items-center justify-between flex-wrap gap-4">
         <div className="flex items-center gap-3">
           <Info className="text-primary" size={20} />
           <div>

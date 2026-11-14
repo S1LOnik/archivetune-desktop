@@ -584,34 +584,59 @@ export async function ytmusicGetExplore() {
   return { sections };
 }
 
+const pendingStreams = new Map<string, Promise<string | null>>();
+
+function extractStreamCandidates(videoId: string): Promise<string[]> {
+  return new Promise((resolve) => {
+    execFile('yt-dlp', ['-J', '--no-playlist', `https://www.youtube.com/watch?v=${videoId}`],
+      { timeout: 20000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+        if (err || !stdout) return resolve([]);
+        try {
+          const info = JSON.parse(stdout);
+          const formats = (info.formats || []).filter((f: any) =>
+            f.vcodec === 'none' && f.acodec !== 'none' && f.protocol === 'https' && f.url);
+          formats.sort((a: any, b: any) => (b.abr || b.tbr || 0) - (a.abr || a.tbr || 0));
+          resolve(formats.map((f: any) => f.url));
+        } catch { resolve([]); }
+      });
+  });
+}
+
+function isStreamAccessible(url: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const req = https.get(url, { headers: { Range: 'bytes=0-0' } }, (res) => {
+      const ok = res.statusCode === 200 || res.statusCode === 206;
+      res.destroy();
+      resolve(ok);
+    });
+    req.setTimeout(2500, () => { req.destroy(); resolve(false); });
+    req.on('error', () => resolve(false));
+  });
+}
+
 export function ytmusicGetStreamUrl(videoId: string): Promise<string | null> {
   if (!videoId) return Promise.resolve(null);
   const cached = streamUrlCache.get(videoId);
   if (cached && cached.expiresAt > Date.now()) return Promise.resolve(cached.url);
-
-  return new Promise((resolve) => {
-    execFile(
-      'yt-dlp',
-      ['-f', 'ba/bestaudio/251/140/best', '-g', '--no-playlist', `https://www.youtube.com/watch?v=${videoId}`],
-      { timeout: 15000 },
-      (err, stdout) => {
-        if (err || !stdout) return resolve(null);
-        const lines = stdout.trim().split('\n').map((l) => l.trim()).filter((l) => l.startsWith('http'));
-        if (lines.length === 0) return resolve(null);
-        // Explicitly pick the pure audio stream (itag 251/140 or mime=audio) so mpv doesn't stall on video-only streams!
-        const audioUrl =
-          lines.find((l) => l.includes('mime=audio') || l.includes('mime%2Faudio') || l.includes('itag=251') || l.includes('itag=140')) ||
-          lines[lines.length - 1];
-
-        if (audioUrl && audioUrl.startsWith('http')) {
-          streamUrlCache.set(videoId, { url: audioUrl, expiresAt: Date.now() + 20 * 60 * 1000 });
-          resolve(audioUrl);
-        } else {
-          resolve(null);
-        }
-      }
-    );
-  });
+  const pending = pendingStreams.get(videoId);
+  if (pending) return pending;
+  const task = (async () => {
+    const candidates = await extractStreamCandidates(videoId);
+    let url: string | null = null;
+    // Probe a few audio formats in parallel, without repeating YouTube extraction.
+    for (let i = 0; i < candidates.length && !url; i += 4) {
+      const batch = candidates.slice(i, i + 4);
+      const available = await Promise.all(batch.map(isStreamAccessible));
+      url = batch.find((_, index) => available[index]) || null;
+    }
+    if (url) {
+      if (streamUrlCache.size >= 150) streamUrlCache.delete(streamUrlCache.keys().next().value!);
+      streamUrlCache.set(videoId, { url, expiresAt: Date.now() + 20 * 60 * 1000 });
+    }
+    return url;
+  })().finally(() => pendingStreams.delete(videoId));
+  pendingStreams.set(videoId, task);
+  return task;
 }
 
 const CATEGORY_QUERIES: Record<string, string> = {

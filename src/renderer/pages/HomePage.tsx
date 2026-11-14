@@ -201,32 +201,32 @@ export default function HomePage() {
   };
 
   return (
-    <div className="p-6 space-y-8 pb-28">
+    <div className="home-page p-8 space-y-8 pb-12">
       {/* Dynamic Header */}
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
           <h1 className="text-3xl font-black text-on-surface tracking-tight mb-1">{greeting} 🌸</h1>
           <p className="text-sm text-on-surface-variant font-medium">
-            Персональные рекомендации YouTube Music + Spotify • Dual-Deck AutoMix
+            Музыка, к которой хочется возвращаться
           </p>
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
           <button
             onClick={() => navigate('/explore')}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-surface-container hover:bg-surface-container-high text-xs font-semibold text-on-surface border border-outline-variant/20 transition-all"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-surface-container hover:bg-surface-container-high text-xs font-semibold text-on-surface transition-all"
           >
             <Compass size={14} className="text-primary" /> Обзор
           </button>
           <button
             onClick={() => navigate('/recognize')}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-surface-container hover:bg-surface-container-high text-xs font-semibold text-on-surface border border-outline-variant/20 transition-all"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-surface-container hover:bg-surface-container-high text-xs font-semibold text-on-surface transition-all"
           >
             <AudioLines size={14} className="text-primary" /> Shazam
           </button>
           <button
             onClick={() => navigate('/together')}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-surface-container hover:bg-surface-container-high text-xs font-semibold text-on-surface border border-outline-variant/20 transition-all"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-surface-container hover:bg-surface-container-high text-xs font-semibold text-on-surface transition-all"
           >
             <Users size={14} className="text-primary" /> Вместе
           </button>
@@ -253,7 +253,7 @@ export default function HomePage() {
               void startRadio(quickPicks[0]);
             }
           }}
-          className="group p-4 rounded-2xl bg-gradient-to-br from-primary/25 via-primary/10 to-surface-container border border-primary/20 text-left flex items-center justify-between hover:border-primary/50 transition-all"
+          className="group p-4 rounded-2xl bg-gradient-to-br from-primary/25 via-primary/10 to-surface-container text-left flex items-center justify-between transition-all"
         >
           <div className="space-y-1">
             <div className="flex items-center gap-2 text-xs font-bold text-primary">
@@ -271,7 +271,7 @@ export default function HomePage() {
 
         <button
           onClick={() => navigate('/library')}
-          className="p-4 rounded-2xl bg-surface-container border border-outline-variant/20 text-left flex items-center justify-between hover:bg-surface-container-high transition-all"
+          className="p-4 rounded-2xl bg-surface-container text-left flex items-center justify-between hover:bg-surface-container-high transition-all"
         >
           <div className="space-y-1">
             <p className="text-xs font-bold text-on-surface-variant">Единая медиатека</p>
@@ -291,14 +291,14 @@ export default function HomePage() {
 
         <button
           onClick={() => navigate('/integrations')}
-          className="p-4 rounded-2xl bg-surface-container border border-outline-variant/20 text-left flex items-center justify-between hover:bg-surface-container-high transition-all"
+          className="p-4 rounded-2xl bg-surface-container text-left flex items-center justify-between hover:bg-surface-container-high transition-all"
         >
           <div className="space-y-1">
             <div className="flex items-center gap-2 text-xs font-bold text-emerald-400">
-              <PlugZap size={14} /> Интеграции &amp; Источники
+              <PlugZap size={14} /> Твои источники
             </div>
             <p className="text-sm font-black text-on-surface">Spotify + YT Music + SC</p>
-            <p className="text-[11px] text-on-surface-variant">Авто-синхронизация и умный свитчер</p>
+            <p className="text-[11px] text-on-surface-variant">Вся музыка в одном месте</p>
           </div>
           <span className="px-2.5 py-1 rounded-lg bg-surface-container-highest text-[11px] font-bold text-on-surface">
             Настроить
@@ -366,9 +366,9 @@ export default function HomePage() {
                 <div
                   key={`qp-${track.id}-${i}`}
                   onClick={() => handlePlayQueue(quickPicks, i)}
-                  className="group flex items-center gap-3 p-2 rounded-xl bg-surface-container/80 hover:bg-surface-container-high transition-all duration-200 cursor-pointer border border-outline-variant/10 hover:border-primary/30"
+                  className="group flex items-center gap-3 p-2 rounded-2xl bg-surface-container/80 hover:bg-surface-container-high transition-all duration-200 cursor-pointer"
                 >
-                  <div className="relative w-13 h-13 rounded-lg overflow-hidden bg-surface-container-highest shrink-0 shadow">
+                  <div className="relative w-12 h-12 rounded-lg overflow-hidden bg-surface-container-highest shrink-0 shadow">
                     {track.thumbnail ? (
                       <img
                         src={track.thumbnail}
@@ -384,8 +384,8 @@ export default function HomePage() {
                       <span
                         className={`text-[9px] font-black px-1.5 py-0.5 rounded uppercase shrink-0 ${
                           isSp
-                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                            : 'bg-red-500/20 text-red-300 border border-red-500/30'
+                            ? 'bg-emerald-500/20 text-emerald-300  '
+                            : 'bg-red-500/20 text-red-300  '
                         }`}
                       >
                         {isSp ? 'SP' : 'YT'}
@@ -429,7 +429,7 @@ export default function HomePage() {
                 <div
                   key={mix.id}
                   onClick={() => handlePlayQueue(mix.tracks, 0)}
-                  className="group p-3.5 rounded-2xl bg-surface-container hover:bg-surface-container-high border border-outline-variant/15 hover:border-primary/40 transition-all cursor-pointer flex flex-col justify-between gap-3 shadow-sm"
+                  className="group p-3.5 rounded-2xl bg-surface-container hover:bg-surface-container-high transition-all cursor-pointer flex flex-col justify-between gap-3 shadow-sm"
                 >
                   <div className="flex items-start gap-3">
                     {/* 2x2 Cover Collage */}
@@ -448,8 +448,8 @@ export default function HomePage() {
                       <span
                         className={`inline-block text-[9px] font-black px-2 py-0.5 rounded-full uppercase mb-1 ${
                           isSp
-                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                            : 'bg-red-500/20 text-red-300 border border-red-500/30'
+                            ? 'bg-emerald-500/20 text-emerald-300  '
+                            : 'bg-red-500/20 text-red-300  '
                         }`}
                       >
                         {isSp ? 'Spotify Jam' : 'YouTube Mix'}
@@ -462,7 +462,7 @@ export default function HomePage() {
                   </div>
 
                   {/* Mini tracklist preview */}
-                  <div className="space-y-1 pt-1 border-t border-outline-variant/15">
+                  <div className="space-y-1 pt-1">
                     {mix.tracks.slice(0, 3).map((t, idx) => (
                       <div key={`${t.id}-${idx}`} className="flex items-center justify-between text-[11px] gap-2">
                         <span className="text-on-surface/90 font-medium truncate">
@@ -518,7 +518,7 @@ export default function HomePage() {
               <div
                 key={pl.id}
                 onClick={() => void handlePlaySpotifyPlaylist(pl)}
-                className="group w-40 shrink-0 p-3 rounded-2xl bg-surface-container hover:bg-surface-container-high border border-outline-variant/15 hover:border-emerald-500/40 transition-all cursor-pointer flex flex-col gap-2"
+                className="group w-40 shrink-0 p-3 rounded-2xl bg-surface-container hover:bg-surface-container-high transition-all cursor-pointer flex flex-col gap-2"
               >
                 <div className="relative aspect-square rounded-xl overflow-hidden bg-surface-container-highest">
                   {pl.thumbnail ? (
@@ -530,7 +530,7 @@ export default function HomePage() {
                   ) : (
                     <div className="w-full h-full flex items-center justify-center text-3xl">💚</div>
                   )}
-                  <span className="absolute top-2 left-2 text-[9px] font-black px-1.5 py-0.5 rounded bg-black/70 text-emerald-300 border border-emerald-500/30">
+                  <span className="absolute top-2 left-2 text-[9px] font-black px-1.5 py-0.5 rounded bg-black/70 text-emerald-300">
                     SPOTIFY
                   </span>
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
@@ -574,7 +574,7 @@ export default function HomePage() {
               <div
                 key={`sp-top-${track.id}-${i}`}
                 onClick={() => handlePlayQueue(spotifyTracks, i)}
-                className="group w-36 shrink-0 p-2.5 rounded-2xl bg-surface-container hover:bg-surface-container-high border border-outline-variant/10 hover:border-emerald-500/40 transition-all cursor-pointer flex flex-col gap-2"
+                className="group w-36 shrink-0 p-2.5 rounded-2xl bg-surface-container hover:bg-surface-container-high transition-all cursor-pointer flex flex-col gap-2"
               >
                 <div className="relative aspect-square rounded-xl overflow-hidden bg-surface-container-highest">
                   {track.thumbnail ? (
@@ -690,7 +690,7 @@ export default function HomePage() {
                 <div
                   key={`${item.id}-${i}`}
                   onClick={() => void handleShelfItemClick(item, shelfSongs)}
-                  className="group w-40 shrink-0 p-3 rounded-2xl bg-surface-container hover:bg-surface-container-high border border-outline-variant/10 hover:border-red-500/40 transition-all cursor-pointer flex flex-col gap-2"
+                  className="group w-40 shrink-0 p-3 rounded-2xl bg-surface-container hover:bg-surface-container-high transition-all cursor-pointer flex flex-col gap-2"
                 >
                   <div className="relative aspect-square rounded-xl overflow-hidden bg-surface-container-highest">
                     {item.thumbnail ? (

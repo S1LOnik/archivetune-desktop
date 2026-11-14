@@ -88,7 +88,7 @@ export default function TagEditorModal() {
       onClick={() => setTagEditorTrack(null)}
     >
       <div
-        className="w-full max-w-lg bg-surface-container border border-outline-variant/40 rounded-3xl shadow-2xl p-6 space-y-4"
+        className="w-full max-w-lg bg-surface-container   rounded-3xl shadow-2xl p-6 space-y-4"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">

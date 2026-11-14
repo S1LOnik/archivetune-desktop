@@ -14,6 +14,10 @@ import { AudioSourceId, getDb } from './db';
 import { TitleMatch, TrackMatching } from './automix';
 import { ytmusicSearchSongs, ytmusicGetStreamUrl } from './ytmusic';
 import { getSoundCloudClientId, getStoredSoundCloudToken } from './soundcloudAuth';
+import { spotifySearchCandidates, getSpotifyAudioCredentials } from './spotify';
+import { resolveNativeSpotify } from './spotifyNative';
+import { getOfflineLibrary } from './offline';
+import { getPlaybackCache } from './playbackCache';
 
 export interface MultiTrackCandidate {
   id: string;
@@ -464,13 +468,14 @@ export async function findAlternativeSources(track: {
   const query = `${track.title} ${track.artist}`.trim();
   const wantedDurMs = track.duration ? track.duration * 1000 : undefined;
 
-  const [tidal, qobuz, deezer, saavn, ytm, sc] = await Promise.all([
+  const [tidal, qobuz, deezer, saavn, ytm, sc, sp] = await Promise.all([
     searchTidal(query, 4).catch(() => []),
     searchQobuz(query, 4).catch(() => []),
     searchDeezer(query, 4).catch(() => []),
     searchJioSaavn(query, 4).catch(() => []),
     ytmusicSearchSongs(query, 4).catch(() => []),
     searchSoundCloud(query, 3).catch(() => []),
+    spotifySearchCandidates(query, 3).catch(() => []),
   ]);
 
   const ytmCandidates: MultiTrackCandidate[] = ytm.map((y) => ({
@@ -487,7 +492,7 @@ export async function findAlternativeSources(track: {
     lossless: false,
   }));
 
-  const all = [...tidal, ...qobuz, ...deezer, ...saavn, ...ytmCandidates, ...sc];
+  const all = [...tidal, ...qobuz, ...deezer, ...saavn, ...ytmCandidates, ...sc, ...(sp as MultiTrackCandidate[])];
   const scored: MultiTrackCandidate[] = [];
 
   for (const cand of all) {
@@ -516,7 +521,7 @@ async function resolveBySourceId(
   source: AudioSourceId,
   track: { id: string; title: string; artist: string; album?: string; duration?: number },
   settings: ReturnType<typeof getDb>['settings']
-): Promise<{ url: string; qualityLabel: string; lossless: boolean } | null> {
+): Promise<{ url: string; qualityLabel: string; lossless: boolean; actualSource?: AudioSourceId } | null> {
   const query = `${track.title} ${track.artist}`.trim();
   const wantedDurMs = track.duration ? track.duration * 1000 : undefined;
 
@@ -610,23 +615,69 @@ async function resolveBySourceId(
       }
     }
   } else if (source === 'youtube') {
-    if (!track.id.includes(':')) {
-      const url = await ytmusicGetStreamUrl(track.id);
+    const cleanYtId = track.id.replace(/^youtube:/, '');
+    if (cleanYtId.length === 11 && !cleanYtId.includes(':') && !cleanYtId.includes('/')) {
+      const url = await ytmusicGetStreamUrl(cleanYtId);
       if (url) return { url, qualityLabel: 'YouTube Music Opus', lossless: false };
-    } else {
-      const ytm = await ytmusicSearchSongs(query, 5);
+    }
+    const cleanQuery = `${track.title} ${track.artist}`.replace(/\s*[([].*?[)\]]/g, '').trim();
+    const ytm = await ytmusicSearchSongs(cleanQuery || query, 5);
+    const cands: MultiTrackCandidate[] = ytm.map((y) => ({
+      id: y.id,
+      title: y.title,
+      artist: y.artist,
+      duration: y.duration,
+      source: 'youtube',
+      qualityLabel: 'YouTube Music Opus',
+    }));
+    const match = pickBest(cands) || cands[0];
+    if (match) {
+      const url = await ytmusicGetStreamUrl(match.id);
+      if (url) return { url, qualityLabel: 'YouTube Music Opus', lossless: false };
+    }
+  } else if (source === 'spotify') {
+    const cleanQuery = `${track.title} ${track.artist}`.replace(/\s*[([].*?[)\]]/g, '').trim();
+    const nativeId = track.id.replace(/^spotify:(track:)?/, '');
+    if (settings.nativeSpotifyEnabled) {
+      const creds = await getSpotifyAudioCredentials();
+      if (creds) {
+        if (/^[a-zA-Z0-9]{22}$/.test(nativeId)) {
+          const native = await resolveNativeSpotify(track.id, creds);
+          if (native) return native;
+        } else {
+          try {
+            const candidates = await spotifySearchCandidates(cleanQuery || query, 4);
+            const bestSp = pickBest(candidates) || candidates[0];
+            if (bestSp?.id) {
+              const native = await resolveNativeSpotify(bestSp.id, creds);
+              if (native) return native;
+            }
+          } catch {
+            /* Fallback to YouTube Music */
+          }
+        }
+      }
+    }
+    // Spotify track resolution fallback via YouTube Music Opus
+    const cleanYtId = track.id.replace(/^spotify:(track:)?/, '');
+    if (cleanYtId.length === 11 && !cleanYtId.includes(':') && !cleanYtId.includes('/')) {
+      const url = await ytmusicGetStreamUrl(cleanYtId);
+      if (url) return { url, qualityLabel: 'YouTube Music • подбор по Spotify', lossless: false };
+    }
+    const ytm = await ytmusicSearchSongs(cleanQuery || query, 5);
+    if (ytm.length > 0) {
       const cands: MultiTrackCandidate[] = ytm.map((y) => ({
         id: y.id,
         title: y.title,
         artist: y.artist,
         duration: y.duration,
         source: 'youtube',
-        qualityLabel: 'YouTube Music Opus',
+        qualityLabel: 'YouTube Music • подбор по Spotify',
       }));
       const match = pickBest(cands) || cands[0];
       if (match) {
         const url = await ytmusicGetStreamUrl(match.id);
-        if (url) return { url, qualityLabel: 'YouTube Music Opus', lossless: false };
+        if (url) return { url, qualityLabel: 'YouTube Music • подбор по Spotify', lossless: false };
       }
     }
   }
@@ -667,14 +718,26 @@ async function resolveCandidateDirectStream(
   } else if (cand.source === 'youtube') {
     const url = await ytmusicGetStreamUrl(cand.id.replace(/^youtube:/, ''));
     if (url) return { url, qualityLabel: 'YouTube Music Opus', lossless: false };
+  } else if (cand.source === 'spotify') {
+    const ytm = await ytmusicSearchSongs(`${cand.title} ${cand.artist}`, 3);
+    if (ytm[0]?.id) {
+      const url = await ytmusicGetStreamUrl(ytm[0].id);
+      if (url) return { url, qualityLabel: 'YouTube Music • подбор по Spotify', lossless: false };
+    }
   }
   return null;
 }
 
 export async function resolveUniversalStream(
   track: { id: string; title: string; artist: string; album?: string; duration?: number; source: string; path?: string },
-  forceSource?: AudioSourceId
+  forceSource?: AudioSourceId,
+  excludedSources: string[] = []
 ): Promise<SmartStreamResolution> {
+  const offline = !forceSource && !excludedSources.length ? (getOfflineLibrary().find(track.id) || getPlaybackCache().find(track.id)) : null;
+  if (offline) return {
+    streamUrl: offline.filePath, actualSource: 'local', originalSource: track.source,
+    qualityLabel: 'Сохранено офлайн', lossless: false, switched: false,
+  };
   if (track.source === 'local' || (track.path && !track.path.startsWith('http'))) {
     return {
       streamUrl: track.path || null,
@@ -687,89 +750,56 @@ export async function resolveUniversalStream(
   }
 
   const settings = getDb().settings;
-  const threshold = settings.autoSwitchThreshold ?? 88;
-  const preferLossless = settings.preferLosslessOverExact ?? true;
 
-  // Smart Multi-Source Auto-Switch: when autoUpgradeLossless is ON and no manual forceSource is requested,
-  // evaluate candidates across all enabled providers and automatically pick the best match >= threshold!
-  if (!forceSource && settings.autoUpgradeLossless && settings.preferredAudioSource === 'auto') {
-    try {
-      const candidates = await findAlternativeSources(track);
-      const eligible = candidates
-        .filter((c) => settings.enabledSources[c.source] !== false && (c.matchScore ?? 0) >= threshold)
-        .sort((a, b) => {
-          if (preferLossless && Boolean(b.lossless) !== Boolean(a.lossless)) {
-            return b.lossless ? 1 : -1;
-          }
-          if ((b.matchScore || 0) !== (a.matchScore || 0)) {
-            return (b.matchScore || 0) - (a.matchScore || 0);
-          }
-          return Boolean(b.lossless) === Boolean(a.lossless) ? 0 : b.lossless ? 1 : -1;
-        });
-
-      for (const bestCand of eligible.slice(0, 4)) {
-        try {
-          const direct = await resolveCandidateDirectStream(bestCand, settings);
-          if (direct?.url) {
-            const switched = bestCand.source !== track.source;
-            return {
-              streamUrl: direct.url,
-              actualSource: bestCand.source,
-              originalSource: track.source,
-              qualityLabel: `${direct.qualityLabel} (${bestCand.matchScore}% match)`,
-              lossless: direct.lossless,
-              switched,
-              switchedReason: switched
-                ? `Умный авто-выбор (${bestCand.matchScore}% совпадение) → ${bestCand.source.toUpperCase()} ${direct.qualityLabel}`
-                : undefined,
-            };
-          }
-        } catch {
-          /* try next best candidate */
-        }
-      }
-    } catch {
-      /* fallback to sequential chain */
-    }
-  }
-
-  const order = settings.sourceOrder.filter((s) => settings.enabledSources[s] && s !== 'apple' && s !== 'spotify');
-
+  // Build the prioritized resolution chain
   const chain: AudioSourceId[] = [];
-  if (forceSource) chain.push(forceSource);
 
-  if (settings.preferredAudioSource !== 'auto' && settings.preferredAudioSource !== 'apple' && settings.preferredAudioSource !== 'spotify') {
-    if (!chain.includes(settings.preferredAudioSource)) chain.push(settings.preferredAudioSource);
+  if (forceSource) {
+    // 1. Manual user override from SourceSwitcherModal / context menu
+    chain.push(forceSource);
+  } else if (settings.preferredAudioSource && settings.preferredAudioSource !== 'auto') {
+    // 2. User explicitly pinned a preferred source in settings
+    chain.push(settings.preferredAudioSource);
   }
 
-  if (settings.autoUpgradeLossless && !forceSource) {
-    for (const hi of ['tidal', 'qobuz', 'deezer'] as AudioSourceId[]) {
-      if (settings.enabledSources[hi] && !chain.includes(hi)) chain.push(hi);
-    }
+  // 3. Auto-fallback routing: Smart detection of track format
+  const cleanYt = track.id.replace(/^youtube:/, '');
+  const looksLikeYouTubeId = cleanYt.length === 11 && !cleanYt.includes(':') && !cleanYt.includes('/');
+
+  let defaultAutoOrder: AudioSourceId[];
+  if (track.source === 'youtube' || looksLikeYouTubeId) {
+    defaultAutoOrder = ['youtube', 'spotify', 'soundcloud'];
+  } else if (track.source === 'spotify' || track.id.startsWith('spotify:')) {
+    defaultAutoOrder = ['spotify', 'youtube', 'soundcloud'];
+  } else if (track.source === 'soundcloud' || track.id.startsWith('soundcloud:')) {
+    defaultAutoOrder = ['soundcloud', 'youtube', 'spotify'];
+  } else {
+    // Default: try YouTube (fast direct streaming), then Spotify, then SoundCloud
+    defaultAutoOrder = ['youtube', 'spotify', 'soundcloud'];
   }
 
-  if (track.source !== 'spotify' && track.source !== 'apple' && track.source !== 'local') {
-    const nat = track.source as AudioSourceId;
-    if (!chain.includes(nat)) chain.push(nat);
+  for (const s of defaultAutoOrder) {
+    if (!chain.includes(s)) chain.push(s);
   }
 
-  if (settings.universalFallback) {
-    for (const s of order) {
-      if (!chain.includes(s)) chain.push(s);
-    }
-    if (!chain.includes('youtube')) chain.push('youtube');
-  }
-
+  const deadline = Date.now() + (excludedSources.length ? 20000 : 45000);
   for (const src of chain) {
+    if (Date.now() >= deadline) break;
+    if (excludedSources.includes(src) || (src === 'spotify' && excludedSources.includes('youtube'))) continue;
     const lat = latencyCache.get(src);
     if (!forceSource && lat && Date.now() - lat.checkedAt < 60000 && lat.status === 'offline') {
       continue;
     }
 
     try {
-      const resolved = await resolveBySourceId(src, track, settings);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const resolved = await Promise.race([
+        resolveBySourceId(src, track, settings),
+        new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), Math.min(15000, deadline - Date.now())); }),
+      ]).finally(() => { if (timer) clearTimeout(timer); });
       if (resolved?.url) {
-        const switched = src !== track.source;
+        const actualSource = resolved.actualSource || (src === 'spotify' ? 'youtube' : src);
+        const switched = actualSource !== track.source;
         let switchedReason: string | undefined;
         if (forceSource) {
           switchedReason = `Ручное переключение → ${resolved.qualityLabel}`;
@@ -780,7 +810,7 @@ export async function resolveUniversalStream(
         }
         return {
           streamUrl: resolved.url,
-          actualSource: src,
+          actualSource,
           originalSource: track.source,
           qualityLabel: resolved.qualityLabel,
           lossless: resolved.lossless,
