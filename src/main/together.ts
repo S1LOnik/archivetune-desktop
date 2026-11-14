@@ -103,6 +103,9 @@ class ListenTogetherManager {
     const hostParticipant: TogetherParticipant = { id: 'host', name: displayName || 'Host', isHost: true, rttMs: 0 };
 
     this.wss = new WebSocketServer({ port });
+    this.wss.on('error', (err) => {
+      console.warn('[Together] WebSocketServer error:', err);
+    });
     const lanIp = this.getLanIp();
 
     this.state = {

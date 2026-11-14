@@ -20,6 +20,7 @@
     "dist:linux": "npm run build && electron-builder --linux",
     "lint": "eslint src --ext .ts,.tsx",
     "typecheck": "tsc --noEmit",
+    "test": "node scripts/test-engine.mjs",
     "build:native-spotify": "python3 scripts/build-spotify-native.py"
   },
   "dependencies": {

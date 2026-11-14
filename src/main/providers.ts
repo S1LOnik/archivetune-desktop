@@ -729,6 +729,7 @@ async function resolveCandidateDirectStream(
 }
 
 const universalResolutionCache = new Map<string, { res: SmartStreamResolution; expiresAt: number }>();
+const inFlightResolutions = new Map<string, Promise<SmartStreamResolution>>();
 
 export async function resolveUniversalStream(
   track: { id: string; title: string; artist: string; album?: string; duration?: number; source: string; path?: string },
@@ -759,95 +760,108 @@ export async function resolveUniversalStream(
     }
   }
 
-  const settings = getDb().settings;
+  const flightKey = `${cacheKey}:${excludedSources.slice().sort().join(',')}`;
+  const existingFlight = inFlightResolutions.get(flightKey);
+  if (existingFlight) return existingFlight;
 
-  // Build the prioritized resolution chain
-  const chain: AudioSourceId[] = [];
+  const resolutionTask = (async (): Promise<SmartStreamResolution> => {
+    const settings = getDb().settings;
 
-  if (forceSource) {
-    // 1. Manual user override from SourceSwitcherModal / context menu
-    chain.push(forceSource);
-  } else if (settings.preferredAudioSource && settings.preferredAudioSource !== 'auto') {
-    // 2. User explicitly pinned a preferred source in settings
-    chain.push(settings.preferredAudioSource);
-  }
+    // Build the prioritized resolution chain
+    const chain: AudioSourceId[] = [];
 
-  // 3. Auto-fallback routing: Smart detection of track format
-  const cleanYt = track.id.replace(/^youtube:/, '');
-  const looksLikeYouTubeId = cleanYt.length === 11 && !cleanYt.includes(':') && !cleanYt.includes('/');
-
-  let defaultAutoOrder: AudioSourceId[];
-  if (track.source === 'youtube' || looksLikeYouTubeId) {
-    defaultAutoOrder = ['youtube', 'spotify', 'soundcloud'];
-  } else if (track.source === 'spotify' || track.id.startsWith('spotify:')) {
-    defaultAutoOrder = ['spotify', 'youtube', 'soundcloud'];
-  } else if (track.source === 'soundcloud' || track.id.startsWith('soundcloud:')) {
-    defaultAutoOrder = ['soundcloud', 'youtube', 'spotify'];
-  } else {
-    // Default: try YouTube (fast direct streaming), then Spotify, then SoundCloud
-    defaultAutoOrder = ['youtube', 'spotify', 'soundcloud'];
-  }
-
-  for (const s of defaultAutoOrder) {
-    if (!chain.includes(s)) chain.push(s);
-  }
-
-  const deadline = Date.now() + (excludedSources.length ? 20000 : 45000);
-  for (const src of chain) {
-    if (Date.now() >= deadline) break;
-    if (excludedSources.includes(src) || (src === 'spotify' && excludedSources.includes('youtube'))) continue;
-    const lat = latencyCache.get(src);
-    if (!forceSource && lat && Date.now() - lat.checkedAt < 60000 && lat.status === 'offline') {
-      continue;
+    if (forceSource) {
+      // 1. Manual user override from SourceSwitcherModal / context menu
+      chain.push(forceSource);
+    } else if (settings.preferredAudioSource && settings.preferredAudioSource !== 'auto') {
+      // 2. User explicitly pinned a preferred source in settings
+      chain.push(settings.preferredAudioSource);
     }
 
-    try {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const resolved = await Promise.race([
-        resolveBySourceId(src, track, settings),
-        new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), Math.min(15000, deadline - Date.now())); }),
-      ]).finally(() => { if (timer) clearTimeout(timer); });
-      if (resolved?.url) {
-        const actualSource = resolved.actualSource || (src === 'spotify' ? 'youtube' : src);
-        const switched = actualSource !== track.source;
-        let switchedReason: string | undefined;
-        if (forceSource) {
-          switchedReason = `Ручное переключение → ${resolved.qualityLabel}`;
-        } else if (switched && resolved.lossless) {
-          switchedReason = `Авто-апгрейд → ${resolved.qualityLabel}`;
-        } else if (switched) {
-          switchedReason = `Fallback → ${resolved.qualityLabel}`;
-        }
-        const outcome: SmartStreamResolution = {
-          streamUrl: resolved.url,
-          headers: resolved.headers,
-          actualSource,
-          originalSource: track.source,
-          qualityLabel: resolved.qualityLabel,
-          lossless: resolved.lossless,
-          switched,
-          switchedReason,
-        };
-        if (!forceSource && excludedSources.length === 0 && resolved.url) {
-          if (universalResolutionCache.size >= 200) {
-            universalResolutionCache.delete(universalResolutionCache.keys().next().value!);
-          }
-          universalResolutionCache.set(cacheKey, { res: outcome, expiresAt: Date.now() + 15 * 60 * 1000 });
-        }
-        return outcome;
-      }
-    } catch { /* try next source */ }
-  }
+    // 3. Auto-fallback routing: Smart detection of track format
+    const cleanYt = track.id.replace(/^youtube:/, '');
+    const looksLikeYouTubeId = cleanYt.length === 11 && !cleanYt.includes(':') && !cleanYt.includes('/');
 
-  return {
-    streamUrl: null,
-    actualSource: (track.source as AudioSourceId) || 'youtube',
-    originalSource: track.source,
-    qualityLabel: 'Unavailable',
-    lossless: false,
-    switched: false,
-    error: 'All configured audio sources failed to resolve a valid matching stream.',
-  };
+    let defaultAutoOrder: AudioSourceId[];
+    if (track.source === 'youtube' || looksLikeYouTubeId) {
+      defaultAutoOrder = ['youtube', 'spotify', 'soundcloud'];
+    } else if (track.source === 'spotify' || track.id.startsWith('spotify:')) {
+      defaultAutoOrder = ['spotify', 'youtube', 'soundcloud'];
+    } else if (track.source === 'soundcloud' || track.id.startsWith('soundcloud:')) {
+      defaultAutoOrder = ['soundcloud', 'youtube', 'spotify'];
+    } else {
+      // Default: try YouTube (fast direct streaming), then Spotify, then SoundCloud
+      defaultAutoOrder = ['youtube', 'spotify', 'soundcloud'];
+    }
+
+    for (const s of defaultAutoOrder) {
+      if (!chain.includes(s)) chain.push(s);
+    }
+
+    const deadline = Date.now() + (excludedSources.length ? 20000 : 45000);
+    for (const src of chain) {
+      if (Date.now() >= deadline) break;
+      if (excludedSources.includes(src) || (src === 'spotify' && excludedSources.includes('youtube'))) continue;
+      const lat = latencyCache.get(src);
+      if (!forceSource && lat && Date.now() - lat.checkedAt < 60000 && lat.status === 'offline') {
+        continue;
+      }
+
+      try {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const resolved = await Promise.race([
+          resolveBySourceId(src, track, settings),
+          new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), Math.min(15000, deadline - Date.now())); }),
+        ]).finally(() => { if (timer) clearTimeout(timer); });
+        if (resolved?.url) {
+          const actualSource = resolved.actualSource || (src === 'spotify' ? 'youtube' : src);
+          const switched = actualSource !== track.source;
+          let switchedReason: string | undefined;
+          if (forceSource) {
+            switchedReason = `Ручное переключение → ${resolved.qualityLabel}`;
+          } else if (switched && resolved.lossless) {
+            switchedReason = `Авто-апгрейд → ${resolved.qualityLabel}`;
+          } else if (switched) {
+            switchedReason = `Fallback → ${resolved.qualityLabel}`;
+          }
+          const outcome: SmartStreamResolution = {
+            streamUrl: resolved.url,
+            headers: resolved.headers,
+            actualSource,
+            originalSource: track.source,
+            qualityLabel: resolved.qualityLabel,
+            lossless: resolved.lossless,
+            switched,
+            switchedReason,
+          };
+          if (!forceSource && excludedSources.length === 0 && resolved.url) {
+            if (universalResolutionCache.size >= 200) {
+              universalResolutionCache.delete(universalResolutionCache.keys().next().value!);
+            }
+            universalResolutionCache.set(cacheKey, { res: outcome, expiresAt: Date.now() + 15 * 60 * 1000 });
+          }
+          return outcome;
+        }
+      } catch { /* try next source */ }
+    }
+
+    return {
+      streamUrl: null,
+      actualSource: (track.source as AudioSourceId) || 'youtube',
+      originalSource: track.source,
+      qualityLabel: 'Unavailable',
+      lossless: false,
+      switched: false,
+      error: 'All configured audio sources failed to resolve a valid matching stream.',
+    };
+  })();
+
+  inFlightResolutions.set(flightKey, resolutionTask);
+  try {
+    return await resolutionTask;
+  } finally {
+    inFlightResolutions.delete(flightKey);
+  }
 }
 
 export function setupProvidersIPC(): void {

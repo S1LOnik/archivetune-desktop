@@ -39,6 +39,12 @@ export interface LyricsResult {
 }
 
 const lyricsCache = new Map<string, LyricsResult>();
+function cacheLyrics(key: string, res: LyricsResult): void {
+  if (lyricsCache.size >= 100) {
+    lyricsCache.delete(lyricsCache.keys().next().value!);
+  }
+  lyricsCache.set(key, res);
+}
 
 function fetchUrl(urlStr: string, timeoutMs = 8000): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -733,7 +739,7 @@ export function setupLyricsIPC(): void {
           if (res && res.synced.length > 0) {
             if (res.hasWordSync) {
               const enriched = await enrichLyricsWithRomanizationAndTranslation(res);
-              lyricsCache.set(cacheKey, enriched);
+              cacheLyrics(cacheKey, enriched);
               return enriched;
             }
             if (!fallbackSynced) fallbackSynced = res;
@@ -744,7 +750,7 @@ export function setupLyricsIPC(): void {
 
         if (fallbackSynced) {
           const enriched = await enrichLyricsWithRomanizationAndTranslation(fallbackSynced);
-          lyricsCache.set(cacheKey, enriched);
+          cacheLyrics(cacheKey, enriched);
           return enriched;
         }
       } catch (err) {

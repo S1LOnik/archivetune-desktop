@@ -102,6 +102,7 @@ async function resolveTrackStreamUrl(track: Track, forceSource?: AudioSourceId):
 
 let prebufferGeneration = 0;
 let playbackGeneration = 0;
+let playPauseChain = Promise.resolve();
 async function prebufferUpcomingTrackInQueue(): Promise<void> {
   const generation = ++prebufferGeneration;
   const api = window.electronAPI;
@@ -312,49 +313,55 @@ export function usePlayer() {
     [playFromQueue]
   );
 
-  const pause = useCallback(async () => {
-    await window.electronAPI?.player.pause();
+  const pause = useCallback(() => {
     setIsPlaying(false);
-    const t = usePlayerStore.getState().currentTrack;
-    if (t) {
-      window.electronAPI?.desktop?.updatePresence({
-        title: t.title,
-        artist: t.artist,
-        album: t.album,
-        duration: t.duration,
-        position: usePlayerStore.getState().position,
-        isPlaying: false,
-        thumbnail: t.thumbnail,
-      });
-      if (useAccountsStore.getState().together.role === 'host') {
-        window.electronAPI?.together?.syncHostState({ isPlaying: false, position: usePlayerStore.getState().position });
+    playPauseChain = playPauseChain.then(async () => {
+      await window.electronAPI?.player.pause();
+      const t = usePlayerStore.getState().currentTrack;
+      if (t) {
+        window.electronAPI?.desktop?.updatePresence({
+          title: t.title,
+          artist: t.artist,
+          album: t.album,
+          duration: t.duration,
+          position: usePlayerStore.getState().position,
+          isPlaying: false,
+          thumbnail: t.thumbnail,
+        });
+        if (useAccountsStore.getState().together.role === 'host') {
+          window.electronAPI?.together?.syncHostState({ isPlaying: false, position: usePlayerStore.getState().position });
+        }
       }
-    }
+    }).catch(() => {});
+    return playPauseChain;
   }, [setIsPlaying]);
 
-  const resume = useCallback(async () => {
-    const state = usePlayerStore.getState();
-    const st = await window.electronAPI?.player.getStatus();
-    if (!st?.currentUrl && state.currentTrack) {
-      await playTrack(state.currentTrack);
-      return;
-    }
-    await window.electronAPI?.player.resume();
+  const resume = useCallback(() => {
     setIsPlaying(true);
-    if (state.currentTrack) {
-      window.electronAPI?.desktop?.updatePresence({
-        title: state.currentTrack.title,
-        artist: state.currentTrack.artist,
-        album: state.currentTrack.album,
-        duration: state.currentTrack.duration,
-        position: state.position,
-        isPlaying: true,
-        thumbnail: state.currentTrack.thumbnail,
-      });
-      if (useAccountsStore.getState().together.role === 'host') {
-        window.electronAPI?.together?.syncHostState({ isPlaying: true, position: state.position });
+    playPauseChain = playPauseChain.then(async () => {
+      const state = usePlayerStore.getState();
+      const st = await window.electronAPI?.player.getStatus();
+      if (!st?.currentUrl && state.currentTrack) {
+        await playTrack(state.currentTrack);
+        return;
       }
-    }
+      await window.electronAPI?.player.resume();
+      if (state.currentTrack) {
+        window.electronAPI?.desktop?.updatePresence({
+          title: state.currentTrack.title,
+          artist: state.currentTrack.artist,
+          album: state.currentTrack.album,
+          duration: state.currentTrack.duration,
+          position: state.position,
+          isPlaying: true,
+          thumbnail: state.currentTrack.thumbnail,
+        });
+        if (useAccountsStore.getState().together.role === 'host') {
+          window.electronAPI?.together?.syncHostState({ isPlaying: true, position: state.position });
+        }
+      }
+    }).catch(() => {});
+    return playPauseChain;
   }, [playTrack, setIsPlaying]);
 
   const seek = useCallback(
@@ -532,6 +539,11 @@ export function usePlayerEvents() {
         const nextT = store.queue[idx];
         usePlayerStore.setState({ queueIndex: idx, currentTrack: nextT, position: 0 });
         store.addToHistory(nextT);
+        if (useUIStore.getState().dynamicColorFromArt && nextT.thumbnail) {
+          extractDominantColorFromImage(nextT.thumbnail).then((hex) => {
+            useUIStore.getState().setActiveArtColor(hex);
+          }).catch(() => {});
+        }
         api.desktop?.updatePresence({
           title: nextT.title,
           artist: nextT.artist,

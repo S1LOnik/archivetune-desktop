@@ -34,6 +34,8 @@ interface TrackPresenceInfo {
 class DiscordRpcClient {
   private socket: net.Socket | null = null;
   private handshakeDone = false;
+  private lastConnectAttempt = 0;
+  private connectBackoffMs = 1500;
 
   private encodePacket(op: number, payload: unknown): Buffer {
     const json = Buffer.from(JSON.stringify(payload), 'utf-8');
@@ -58,19 +60,29 @@ class DiscordRpcClient {
 
   public connect(): void {
     if (this.socket && !this.socket.destroyed) return;
+    const now = Date.now();
+    if (now - this.lastConnectAttempt < this.connectBackoffMs) return;
+    this.lastConnectAttempt = now;
+
     const sockPath = this.findIpcSocketPath();
     if (!sockPath) return;
     try {
       this.socket = net.createConnection(sockPath, () => {
+        this.connectBackoffMs = 1500;
         this.socket?.write(this.encodePacket(0, { v: 1, client_id: DISCORD_CLIENT_ID }));
       });
       this.socket.on('data', () => { this.handshakeDone = true; });
-      this.socket.on('error', () => { this.disconnect(); });
+      this.socket.on('error', () => {
+        this.connectBackoffMs = Math.min(30000, this.connectBackoffMs * 2);
+        this.disconnect();
+      });
       this.socket.on('close', () => {
         this.handshakeDone = false;
         this.socket = null;
       });
-    } catch { /* ignore */ }
+    } catch {
+      this.connectBackoffMs = Math.min(30000, this.connectBackoffMs * 2);
+    }
   }
 
   public updateActivity(info: TrackPresenceInfo): void {

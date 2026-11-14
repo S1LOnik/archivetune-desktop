@@ -78,6 +78,7 @@ interface DeckInstance {
   nextReqId: number;
   socketBuffer: string;
   pendingLoad?: (error?: string) => void;
+  pendingSeekPosition?: number | null;
   prepared?: boolean;
 }
 
@@ -115,6 +116,7 @@ function createEmptyDeck(id: 'A' | 'B'): DeckInstance {
     pendingRequests: new Map(),
     nextReqId: 1,
     socketBuffer: '',
+    pendingSeekPosition: null,
   };
 }
 
@@ -454,6 +456,9 @@ class DualDeckMpvPlayer {
       '--audio-display=no',
       '--cache=yes',
       '--demuxer-max-bytes=50MiB',
+      '--demuxer-max-back-bytes=25MiB',
+      '--demuxer-readahead-secs=20',
+      '--audio-buffer=0.2',
       '--network-timeout=15',
       '--stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=5',
       '--force-seekable=yes',
@@ -553,6 +558,7 @@ class DualDeckMpvPlayer {
       active.currentUrl = url;
       active.currentTrackId = meta.id;
       active.position = 0;
+      active.pendingSeekPosition = null;
       active.duration = meta.duration || 0;
       active.paused = false;
       active.bassCut = false;
@@ -566,6 +572,11 @@ class DualDeckMpvPlayer {
       void this.applyFiltersToDeck(active);
       if (!prepared) await this.loadDeckStream(active, url, meta.headers);
       if (revision !== this.playbackRevision) throw new Error('Playback cancelled');
+      if (typeof active.pendingSeekPosition === 'number' && active.pendingSeekPosition > 0) {
+        await this.sendDeckCommand(active, ['set_property', 'time-pos', active.pendingSeekPosition]);
+        active.position = active.pendingSeekPosition;
+        active.pendingSeekPosition = null;
+      }
       // Explicitly unpause immediately after loadfile so network streams start playing without hanging
       await this.sendDeckCommand(active, ['set_property', 'pause', false]);
       if (revision !== this.playbackRevision) throw new Error('Playback cancelled');
@@ -614,6 +625,8 @@ class DualDeckMpvPlayer {
     try {
       await this.loadDeckStream(standby, nextData.url, nextData.headers);
       if (revision !== this.prebufferRevision) return { ok: false };
+      await this.sendDeckCommand(standby, ['set_property', 'pause', true]);
+      await this.sendDeckCommand(standby, ['set_property', 'time-pos', 0]);
       if (this.nextPrepared === nextData && standby.currentUrl === nextData.url) standby.prepared = true;
     } catch {
       return { ok: false };
@@ -667,6 +680,8 @@ class DualDeckMpvPlayer {
         this.sendDeckCommand(deck, ['get_property', 'core-idle']),
         this.sendDeckCommand(deck, ['get_property', 'eof-reached']),
       ]);
+
+      if (deck.paused || deck !== this.getActiveDeck()) return;
 
       if (typeof pos === 'number') {
         deck.position = pos;
@@ -872,6 +887,7 @@ class DualDeckMpvPlayer {
       const d = this.decks[id];
       d.paused = true;
       d.position = 0;
+      d.pendingSeekPosition = null;
       d.prepared = false;
       d.currentUrl = null;
       d.currentTrackId = null;
@@ -882,6 +898,10 @@ class DualDeckMpvPlayer {
   public async seek(sec: number): Promise<void> {
     const d = this.getActiveDeck();
     d.position = Math.max(0, sec);
+    if (d.pendingLoad) {
+      d.pendingSeekPosition = d.position;
+      return;
+    }
     await this.sendDeckCommand(d, ['set_property', 'time-pos', d.position]);
   }
 

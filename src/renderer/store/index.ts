@@ -287,12 +287,22 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
   removeFromQueue: (index) => {
     set((s) => {
+      if (index < 0 || index >= s.queue.length) return s;
       const nextQueue = [...s.queue];
-      nextQueue.splice(index, 1);
-      let nextIndex = s.queueIndex;
-      if (index < s.queueIndex) nextIndex = Math.max(0, s.queueIndex - 1);
-      if (nextIndex >= nextQueue.length) nextIndex = nextQueue.length - 1;
-      return { queue: nextQueue, queueIndex: nextIndex };
+      const [removed] = nextQueue.splice(index, 1);
+      const nextOriginal = s.originalQueue.filter((t) => t.id !== removed?.id);
+
+      let nextIndex = s.currentTrack
+        ? nextQueue.findIndex((t) => t.id === s.currentTrack?.id)
+        : -1;
+      if (nextIndex === -1 && nextQueue.length > 0) {
+        nextIndex = Math.min(index, nextQueue.length - 1);
+      }
+      return {
+        queue: nextQueue,
+        originalQueue: nextOriginal,
+        queueIndex: nextIndex,
+      };
     });
     persistQueueState(get());
   },

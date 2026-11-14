@@ -68,6 +68,7 @@ const INNERTUBE_CONTEXT = {
 
 const streamUrlCache = new Map<string, { url: string; expiresAt: number }>();
 const categoryCache = new Map<string, { tracks: YTMusicTrack[]; fetchedAt: number }>();
+const searchSongsCache = new Map<string, { results: YTMusicTrack[]; expiresAt: number }>();
 const CATEGORY_CACHE_TTL_MS = 10 * 60 * 1000;
 
 let innertubePromise: Promise<Innertube | null> | null = null;
@@ -235,6 +236,12 @@ function extractTwoRowOrListEntity(item: any, fallbackType: YTMusicEntity['type'
 
 export async function ytmusicSearchSongs(query: string, limit = 20): Promise<YTMusicTrack[]> {
   if (!query.trim()) return [];
+  const cacheKey = `${query.trim().toLowerCase()}:${limit}`;
+  const hit = searchSongsCache.get(cacheKey);
+  if (hit && hit.expiresAt > Date.now()) {
+    return hit.results;
+  }
+
   const data = await postInnerTube<any>(INNERTUBE_SEARCH_URL, { query, params: 'EgWKAQIIAWoKEAMQBBAJEAoQBQ%3D%3D' });
   const tabs = data?.contents?.tabbedSearchResultsRenderer?.tabs;
   const sections = tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
@@ -245,9 +252,14 @@ export async function ytmusicSearchSongs(query: string, limit = 20): Promise<YTM
       const parsed = extractMusicResponsiveListItem(item);
       if (parsed && !songs.some((s) => s.id === parsed.id)) {
         songs.push(parsed);
-        if (songs.length >= limit) return songs;
+        if (songs.length >= limit) break;
       }
     }
+    if (songs.length >= limit) break;
+  }
+  if (songs.length > 0) {
+    if (searchSongsCache.size >= 120) searchSongsCache.delete(searchSongsCache.keys().next().value!);
+    searchSongsCache.set(cacheKey, { results: songs, expiresAt: Date.now() + 5 * 60 * 1000 });
   }
   return songs;
 }
@@ -1111,7 +1123,10 @@ export function setupYTMusicIPC(): void {
       return cached.tracks;
     }
     const tracks = await ytmusicSearchSongs(CATEGORY_QUERIES[category] || `${category} music hits`, 25);
-    if (tracks.length > 0) categoryCache.set(category, { tracks, fetchedAt: Date.now() });
+    if (tracks.length > 0) {
+      if (categoryCache.size >= 50) categoryCache.delete(categoryCache.keys().next().value!);
+      categoryCache.set(category, { tracks, fetchedAt: Date.now() });
+    }
     return tracks;
   });
   ipcMain.handle('ytmusic:getHome', async (_e, chipParams?: string, forceRefresh = false) =>
