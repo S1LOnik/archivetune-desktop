@@ -5,7 +5,32 @@
  * and concurrency safeguards.
  */
 
-import http from 'http';
+import http from 'node:http';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+async function createSilentWav(dir) {
+  const sampleRate = 8000;
+  const bytes = sampleRate * 2 * 10;
+  const wav = Buffer.alloc(44 + bytes);
+  wav.write('RIFF');
+  wav.writeUInt32LE(36 + bytes, 4);
+  wav.write('WAVEfmt ', 8);
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20); // PCM
+  wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(sampleRate, 24);
+  wav.writeUInt32LE(sampleRate * 2, 28);
+  wav.writeUInt16LE(2, 32);
+  wav.writeUInt16LE(16, 34);
+  wav.write('data', 36);
+  wav.writeUInt32LE(bytes, 40);
+  const file = join(dir, 'silent.wav');
+  await writeFile(file, wav);
+  return pathToFileURL(file).href;
+}
 
 function getCdpPageUrl() {
   return new Promise((resolve, reject) => {
@@ -38,7 +63,12 @@ class CdpClient {
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket(this.wsUrl);
       this.ws.onopen = () => resolve();
-      this.ws.onerror = (e) => reject(e);
+      this.ws.onerror = () => reject(new Error('CDP WebSocket connection failed'));
+      this.ws.onclose = () => {
+        const error = new Error('CDP WebSocket closed');
+        reject(error);
+        for (const request of this.pending.values()) request.reject(error);
+      };
       this.ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
@@ -56,8 +86,19 @@ class CdpClient {
   send(method, params = {}) {
     return new Promise((resolve, reject) => {
       const id = this.id++;
-      this.pending.set(id, { resolve, reject });
-      this.ws.send(JSON.stringify({ id, method, params }));
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`CDP ${method} timed out`));
+      }, 45000);
+      this.pending.set(id, {
+        resolve: (result) => { clearTimeout(timer); resolve(result); },
+        reject: (error) => { clearTimeout(timer); this.pending.delete(id); reject(error); },
+      });
+      try {
+        this.ws.send(JSON.stringify({ id, method, params }));
+      } catch (error) {
+        this.pending.get(id).reject(error);
+      }
     });
   }
 
@@ -273,37 +314,52 @@ async function runSuite() {
     console.log(`    ↳ Verified position: ${res.position.toFixed(1)}s, backward seek time: ${res.seekBackMs}ms`);
   });
 
-  // 6. Fast Multi-Track Skip Resilience
-  await test('Rapid multi-track skipping stress test', async () => {
-    const res = await client.eval(`
-      (async function() {
-        const api = window.electronAPI;
-        const testTracks = [
-          { id: 'skip_1', title: 'Song 1', artist: 'Artist 1', duration: 180, source: 'youtube' },
-          { id: 'skip_2', title: 'Song 2', artist: 'Artist 2', duration: 190, source: 'youtube' },
-          { id: 'skip_3', title: 'Song 3', artist: 'Artist 3', duration: 200, source: 'youtube' },
-          { id: 'skip_4', title: 'Song 4', artist: 'Artist 4', duration: 210, source: 'youtube' },
-        ];
+  await test('Rapid local skips keep progress attached to the newest track', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'archivetune-engine-'));
+    try {
+      const fixture = await createSilentWav(dir);
+      const res = await client.eval(`
+        (async () => {
+          const { player } = window.electronAPI;
+          const fixture = ${JSON.stringify(fixture)};
+          const play = (id) => player.play(fixture, {
+            id, title: id, artist: 'Test fixture', duration: 10, source: 'local',
+          });
+          const initial = await play('rapid_initial');
+          if (!initial.ok) return { error: initial.error };
 
-        // Fire 4 rapid play calls in parallel (simulating furious Next clicks)
-        const calls = testTracks.map(t =>
-          api.player.play('https://invalid.test/stream-' + t.id, {
-            id: t.id,
-            title: t.title,
-            artist: t.artist,
-            duration: t.duration,
-            source: 'youtube',
-          }).catch(e => ({ ok: false, error: e.message }))
-        );
+          const results = await Promise.all([
+            play('rapid_first'), play('rapid_second'), play('rapid_last'),
+          ]);
+          if (!results.at(-1)?.ok) return { error: results.at(-1)?.error };
 
-        await Promise.all(calls);
-
-        // Player must remain healthy without crashed MPV socket
-        const st = await api.player.getStatus();
-        return { ok: typeof st === 'object' && st !== null };
-      })()
-    `);
-    if (!res.ok) throw new Error(res.error);
+          const progress = [];
+          const off = player.onProgress((info) => progress.push(info));
+          try {
+            await player.seek(2);
+            await new Promise(resolve => setTimeout(resolve, 700));
+            const status = await player.getStatus();
+            const wrongTrack = progress.find(info => info.trackId !== 'rapid_last');
+            if (wrongTrack || status.currentTrackId !== 'rapid_last') {
+              return { error: 'Progress/status retained a superseded track' };
+            }
+            if (!progress.some(info => info.position >= 2 && info.position < 4)) {
+              return { error: 'No progress update at the new track position' };
+            }
+            return { ok: true };
+          } finally {
+            off();
+          }
+        })()
+      `);
+      if (!res.ok) throw new Error(res.error || 'The last local track did not start');
+    } finally {
+      try {
+        await client.eval('window.electronAPI.player.stop()');
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
   });
 
   // 7. Clean Teardown & Deck Reset

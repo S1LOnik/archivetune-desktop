@@ -12,15 +12,18 @@
   "scripts": {
     "dev": "concurrently \"npm run dev:renderer\" \"npm run dev:main\"",
     "dev:renderer": "vite --port 5173",
-    "dev:main": "wait-on http://localhost:5173 && tsc -p tsconfig.main.json && electron dist/main/index.js",
+    "dev:main": "wait-on http://localhost:5173 && npm run build:audio-dsp && tsc -p tsconfig.main.json && electron dist/main/index.js",
     "build": "npm run build:renderer && npm run build:main",
     "build:renderer": "vite build",
-    "build:main": "npm run build:native-spotify && tsc -p tsconfig.main.json",
+    "build:main": "npm run build:audio-dsp && npm run build:native-spotify && tsc -p tsconfig.main.json",
     "dist": "npm run build && electron-builder",
     "dist:linux": "npm run build && electron-builder --linux",
     "lint": "eslint src --ext .ts,.tsx",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/test-engine.mjs",
+    "test:audio-dsp": "node --test scripts/test-audio-dsp.cjs",
+    "test:source-routing": "node scripts/test-source-routing.cjs",
+    "build:audio-dsp": "node scripts/build-audio-dsp.cjs",
     "build:native-spotify": "python3 scripts/build-spotify-native.py"
   },
   "dependencies": {

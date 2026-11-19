@@ -10,6 +10,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import https from 'https';
+import { promisify } from 'util';
 import {
   AutoMixAnalysis,
   AutoMixPlan,
@@ -51,8 +52,12 @@ interface TrackPlayMeta {
   bpm?: number;
   duration?: number;
   source?: string;
+  originalSource?: string;
+  spotifyUri?: string;
+  spotifyId?: string;
   thumbnail?: string;
   headers?: Record<string, string>;
+  strictSource?: boolean;
 }
 
 interface NextQueueTrackData {
@@ -65,7 +70,6 @@ interface DeckInstance {
   id: 'A' | 'B';
   proc: ChildProcess | null;
   ipcPath: string;
-  volume: number;
   bassCut: boolean;
   lowpassHz?: number;
   currentUrl: string | null;
@@ -105,7 +109,6 @@ function createEmptyDeck(id: 'A' | 'B'): DeckInstance {
     id,
     proc: null,
     ipcPath: createSocketPath(id),
-    volume: 85,
     bassCut: false,
     currentUrl: null,
     currentTrackId: null,
@@ -126,7 +129,7 @@ class DualDeckMpvPlayer {
     B: createEmptyDeck('B'),
   };
   private activeDeckId: 'A' | 'B' = 'A';
-  private masterVolume = 85;
+  private volume = 0.85;
   private currentSpeed = 1.0;
   private pitchSemitones = 0;
   private normalizationEnabled = false;
@@ -146,7 +149,7 @@ class DualDeckMpvPlayer {
   private prebufferRevision = 0;
   private failedSources = new Set<string>();
 
-  private notifyRecovery(state: { loading: boolean; error?: string; source?: string; badge?: string; lossless?: boolean }): void {
+  private notifyRecovery(state: { loading: boolean; error?: string; source?: string; badge?: string; lossless?: boolean; spotifyId?: string }): void {
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
       this.mainWindow.webContents.send('player:recovery', { ...state, trackId: this.activeMeta?.id });
     }
@@ -154,7 +157,7 @@ class DualDeckMpvPlayer {
 
   private async recoverStream(revision: number, position: number): Promise<{ ok: boolean; error?: string }> {
     const meta = this.activeMeta;
-    if (!meta || !meta.title || !meta.artist || meta.source === 'local' || this.recoveryRevision === revision) {
+    if (!meta || !meta.title || !meta.artist || meta.source === 'local' || meta.strictSource || this.recoveryRevision === revision) {
       if (revision === this.playbackRevision && this.recoveryRevision !== revision) {
         this.notifyRecovery({ loading: false, error: 'Аудиопоток недоступен' });
       }
@@ -166,18 +169,19 @@ class DualDeckMpvPlayer {
       this.failedSources.add(meta.source || 'youtube');
       const replacement = await resolveUniversalStream({
         id: meta.id, title: meta.title, artist: meta.artist, album: meta.album,
-        duration: meta.duration, source: meta.source || 'youtube',
+        duration: meta.duration, source: meta.originalSource || meta.source || 'youtube',
+        spotifyUri: meta.spotifyUri,
       }, undefined, [...this.failedSources]);
       if (revision !== this.playbackRevision) return { ok: false, error: 'Playback cancelled' };
       if (!replacement.streamUrl) throw new Error('Доступные источники не смогли восстановить трек');
       const result = await this.playAttempt(replacement.streamUrl, {
-        ...meta, source: replacement.actualSource, headers: replacement.headers,
+        ...meta, source: replacement.actualSource, headers: replacement.headers, spotifyId: replacement.spotifyId,
       });
       if (revision !== this.playbackRevision) return { ok: false, error: 'Playback cancelled' };
       if (!result.ok) throw new Error(result.error);
       if (position > 1) await this.seek(position);
       this.notifyRecovery({ loading: false, source: replacement.actualSource,
-        badge: `${replacement.actualSource.toUpperCase()} • ${replacement.qualityLabel}`, lossless: replacement.lossless });
+        badge: `${replacement.actualSource.toUpperCase()} • ${replacement.qualityLabel}`, lossless: replacement.lossless, spotifyId: replacement.spotifyId });
       return { ok: true };
     } catch (error: any) {
       if (revision === this.playbackRevision) {
@@ -196,6 +200,7 @@ class DualDeckMpvPlayer {
 
   private mainWindow: BrowserWindow | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
+  private pollingProgress = false;
   private currentAnalysis: AutoMixAnalysis | null = null;
   private nextAnalysis: AutoMixAnalysis | null = null;
 
@@ -216,7 +221,7 @@ class DualDeckMpvPlayer {
 
   constructor() {
     const settings = getDb().settings;
-    this.masterVolume = Math.round((settings.volume ?? 0.85) * 100);
+    this.volume = Math.max(0, Math.min(1, settings.volume ?? 0.85));
     this.currentSpeed = settings.speed ?? 1.0;
     this.pitchSemitones = settings.pitchSemitones ?? 0;
     this.normalizationEnabled = settings.normalization ?? false;
@@ -286,6 +291,7 @@ class DualDeckMpvPlayer {
           try {
             const parsed = JSON.parse(line);
             if (parsed.event === 'file-loaded') deck.pendingLoad?.();
+            if (parsed.event === 'end-file' && parsed.reason === 'eof') this.handleNaturalEnd(deck);
             if (parsed.event === 'end-file' && parsed.reason === 'error') {
               if (deck.pendingLoad) deck.pendingLoad(parsed.file_error || 'mpv could not open the audio stream');
               else if (deck === this.getActiveDeck() && !deck.paused && this.recoveryRevision !== this.playbackRevision) {
@@ -367,10 +373,8 @@ class DualDeckMpvPlayer {
   private async loadDeckStream(
     deck: DeckInstance, url: string, headers?: Record<string, string>
   ): Promise<void> {
-    if (headers && Object.keys(headers).length > 0) {
-      await this.sendDeckCommand(deck, ['set_property', 'http-header-fields',
-        Object.entries(headers).map(([name, value]) => `${name}: ${value}`)]);
-    }
+    await this.sendDeckCommand(deck, ['set_property', 'http-header-fields',
+      Object.entries(headers || {}).map(([name, value]) => `${name}: ${value}`)]);
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => finish('Audio stream loading timed out'), 20000);
       const finish = (error?: string) => {
@@ -451,7 +455,7 @@ class DualDeckMpvPlayer {
       '--no-video',
       '--idle=yes',
       `--input-ipc-server=${deck.ipcPath}`,
-      `--volume=${this.masterVolume}`,
+      `--volume=${this.mpvVolume()}`,
       `--speed=${this.currentSpeed}`,
       '--audio-display=no',
       '--cache=yes',
@@ -525,6 +529,7 @@ class DualDeckMpvPlayer {
     this.failedSources.clear();
     const result = await this.playAttempt(url, meta);
     if (result.ok || revision !== this.playbackRevision) return result;
+    if (meta.strictSource) return result;
     return this.recoverStream(revision, 0);
   }
 
@@ -563,11 +568,10 @@ class DualDeckMpvPlayer {
       active.paused = false;
       active.bassCut = false;
       active.lowpassHz = undefined;
-      active.volume = this.masterVolume;
       this.activeMeta = meta;
 
       // Pipeline deck properties without sequential awaiting
-      void this.sendDeckCommand(active, ['set_property', 'volume', this.masterVolume]);
+      void this.sendDeckCommand(active, ['set_property', 'volume', this.mpvVolume()]);
       void this.sendDeckCommand(active, ['set_property', 'speed', this.currentSpeed]);
       void this.applyFiltersToDeck(active);
       if (!prepared) await this.loadDeckStream(active, url, meta.headers);
@@ -594,10 +598,14 @@ class DualDeckMpvPlayer {
       }
       this.loadSponsorBlockSegments(meta.id).catch(() => {});
       this.startProgressPolling();
-      if (meta.title && meta.artist) getPlaybackCache().schedule({ ...meta, title: meta.title, artist: meta.artist, duration: meta.duration || 0, source: (meta.source || 'youtube') as any }, url, meta.headers);
       return { ok: true };
     } catch (err: any) {
-      if (revision === this.playbackRevision) this.getActiveDeck().paused = true;
+      if (revision === this.playbackRevision) {
+        const failedDeck = this.getActiveDeck();
+        failedDeck.paused = true;
+        failedDeck.currentUrl = null;
+        failedDeck.currentTrackId = null;
+      }
       return { ok: false, error: err?.message || 'mpv play error' };
     }
   }
@@ -606,12 +614,12 @@ class DualDeckMpvPlayer {
     const revision = ++this.prebufferRevision;
     this.nextPrepared = nextData;
     this.nextAnalysis = null;
+    const standby = this.getStandbyDeck();
+    standby.prepared = false;
     if (!nextData || !getDb().settings.prebufferNextTrack) return { ok: true };
 
-    const standby = this.getStandbyDeck();
     await this.ensureDeckSpawned(standby);
     if (revision !== this.prebufferRevision) return { ok: false };
-    standby.prepared = false;
     standby.currentUrl = nextData.url;
     standby.currentTrackId = nextData.meta.id;
     standby.paused = true;
@@ -668,92 +676,110 @@ class DualDeckMpvPlayer {
     }
   }
 
+  private handleNaturalEnd(deck: DeckInstance): void {
+    if (deck !== this.getActiveDeck() || deck.paused || this.isAutomixing) return;
+    deck.paused = true;
+    if (this.sleepAfterTrack) {
+      this.sleepAfterTrack = false;
+      this.emitSleepUpdate();
+      return;
+    }
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) this.mainWindow.webContents.send('player:ended');
+  }
+
   private startProgressPolling(): void {
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.pollTimer = setInterval(async () => {
       const deck = this.getActiveDeck();
-      if (!deck.proc || deck.paused) return;
+      if (!deck.proc || !deck.currentTrackId || deck.paused || deck.pendingLoad || this.pollingProgress) return;
 
-      const [pos, dur, idle, eof] = await Promise.all([
-        this.sendDeckCommand(deck, ['get_property', 'time-pos']),
-        this.sendDeckCommand(deck, ['get_property', 'duration']),
-        this.sendDeckCommand(deck, ['get_property', 'core-idle']),
-        this.sendDeckCommand(deck, ['get_property', 'eof-reached']),
-      ]);
+      const revision = this.playbackRevision;
+      const trackId = deck.currentTrackId;
+      const isCurrent = () => revision === this.playbackRevision
+        && deck === this.getActiveDeck()
+        && trackId === deck.currentTrackId
+        && !deck.paused;
 
-      if (deck.paused || deck !== this.getActiveDeck()) return;
+      this.pollingProgress = true;
+      try {
+        const [pos, dur, idle, eof] = await Promise.all([
+          this.sendDeckCommand(deck, ['get_property', 'time-pos']),
+          this.sendDeckCommand(deck, ['get_property', 'duration']),
+          this.sendDeckCommand(deck, ['get_property', 'core-idle']),
+          this.sendDeckCommand(deck, ['get_property', 'eof-reached']),
+        ]);
 
-      if (typeof pos === 'number') {
-        deck.position = pos;
-      } else if (!deck.paused) {
-        // Unstick any paused-for-cache or initial stalled state
-        await this.sendDeckCommand(deck, ['set_property', 'pause', false]);
-      }
-      if (typeof dur === 'number' && dur > 0) deck.duration = dur;
-
-      // SponsorBlock auto-skip check
-      if (this.sponsorSegments.length > 0 && typeof pos === 'number') {
-        const hit = this.sponsorSegments.find((s) => pos >= s.start && pos < s.end - 0.15);
-        if (hit && Math.abs(hit.end - this.lastSkippedSponsorEnd) > 0.5) {
-          this.lastSkippedSponsorEnd = hit.end;
-          await this.sendDeckCommand(deck, ['set_property', 'time-pos', hit.end]);
-          deck.position = hit.end;
-          this.emitToast(`SponsorBlock: пропущено (${hit.category})`, 'sponsorblock');
+        if (!isCurrent()) return;
+        if (typeof pos === 'number') {
+          deck.position = pos;
+        } else if (!deck.paused) {
+          // Unstick any paused-for-cache or initial stalled state
+          await this.sendDeckCommand(deck, ['set_property', 'pause', false]);
+          if (!isCurrent()) return;
         }
-      }
+        if (typeof dur === 'number' && dur > 0) deck.duration = dur;
 
-      // A-B Looper check
-      if (
-        this.abLoopA !== null &&
-        this.abLoopB !== null &&
-        this.abLoopB > this.abLoopA + 0.5 &&
-        typeof pos === 'number' &&
-        pos >= this.abLoopB
-      ) {
-        await this.sendDeckCommand(deck, ['set_property', 'time-pos', this.abLoopA]);
-        deck.position = this.abLoopA;
-      }
+        // SponsorBlock auto-skip check
+        if (this.sponsorSegments.length > 0 && typeof pos === 'number') {
+          const hit = this.sponsorSegments.find((s) => pos >= s.start && pos < s.end - 0.15);
+          if (hit && Math.abs(hit.end - this.lastSkippedSponsorEnd) > 0.5) {
+            this.lastSkippedSponsorEnd = hit.end;
+            await this.sendDeckCommand(deck, ['set_property', 'time-pos', hit.end]);
+            if (!isCurrent()) return;
+            deck.position = hit.end;
+            this.emitToast(`SponsorBlock: пропущено (${hit.category})`, 'sponsorblock');
+          }
+        }
 
-      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-        this.mainWindow.webContents.send('player:progress', {
-          position: deck.position,
-          duration: deck.duration,
-          isPlaying: !deck.paused,
-          automixing: this.isAutomixing,
-          automixPlan: this.currentPlan,
-        });
-      }
+        // A-B Looper check
+        if (
+          this.abLoopA !== null &&
+          this.abLoopB !== null &&
+          this.abLoopB > this.abLoopA + 0.5 &&
+          typeof pos === 'number' &&
+          pos >= this.abLoopB
+        ) {
+          await this.sendDeckCommand(deck, ['set_property', 'time-pos', this.abLoopA]);
+          if (!isCurrent()) return;
+          deck.position = this.abLoopA;
+        }
 
-      // Check Automix / Crossfade trigger
-      const effectiveFadeSec = this.currentPlan ? this.currentPlan.fadeMs / 1000 : this.crossfadeDurationSec;
-      const audibleEndSec =
-        this.currentPlan && deck.duration > 5
-          ? Math.max(deck.duration * 0.55, this.currentPlan.transitionEndMs / 1000)
-          : SmartDjAutomixManager.getAudibleEndMs(deck.currentTrackId || '', deck.duration * 1000) / 1000;
+        if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+          this.mainWindow.webContents.send('player:progress', {
+            trackId: deck.currentTrackId,
+            position: deck.position,
+            duration: deck.duration,
+            isPlaying: !deck.paused,
+            automixing: this.isAutomixing,
+          });
+        }
 
-      const triggerPointSec = Math.max(1, audibleEndSec - effectiveFadeSec);
+        // Check Automix / Crossfade trigger
+        const effectiveFadeSec = this.currentPlan ? this.currentPlan.fadeMs / 1000 : this.crossfadeDurationSec;
+        const audibleEndSec =
+          this.currentPlan && deck.duration > 5
+            ? Math.max(deck.duration * 0.55, this.currentPlan.transitionEndMs / 1000)
+            : SmartDjAutomixManager.getAudibleEndMs(deck.currentTrackId || '', deck.duration * 1000) / 1000;
 
-      if (
-        !this.isAutomixing &&
-        this.nextPrepared &&
-        (effectiveFadeSec > 0.2 || this.currentPlan?.style === 'GAPLESS') &&
-        deck.duration > 8 &&
-        deck.position >= triggerPointSec
-      ) {
-        await this.beginDualDeckAutomix();
-        return;
-      }
+        const triggerPointSec = Math.max(1, audibleEndSec - effectiveFadeSec);
 
-      if ((eof === true || (idle === true && deck.duration > 1 && deck.position >= deck.duration - 1.5)) && !this.isAutomixing) {
-        deck.paused = true;
-        if (this.sleepAfterTrack) {
-          this.sleepAfterTrack = false;
-          this.emitSleepUpdate();
+        if (
+          !this.isAutomixing &&
+          this.nextPrepared &&
+          (effectiveFadeSec > 0.2 || this.currentPlan?.style === 'GAPLESS') &&
+          deck.duration > 8 &&
+          deck.position >= triggerPointSec
+        ) {
+          void this.beginDualDeckAutomix().catch((error) => {
+            if (isCurrent()) this.cancelAutomix();
+            console.warn('Automix failed:', error);
+          });
           return;
         }
-        if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-          this.mainWindow.webContents.send('player:ended');
-        }
+
+        if (eof === true || (idle === true && deck.duration > 1 && deck.position >= deck.duration - 1.5)) this.handleNaturalEnd(deck);
+      } finally {
+        this.pollingProgress = false;
       }
     }, 250);
   }
@@ -795,7 +821,7 @@ class DualDeckMpvPlayer {
     if (plan.style === 'DJ_BLEND') {
       await this.sendDeckCommand(inDeck, ['set_property', 'speed', plan.incomingPlaybackRate]);
     }
-    await this.sendDeckCommand(inDeck, ['set_property', 'volume', plan.style === 'GAPLESS' ? this.masterVolume : 0]);
+    await this.sendDeckCommand(inDeck, ['set_property', 'volume', plan.style === 'GAPLESS' ? this.mpvVolume() : 0]);
     await this.sendDeckCommand(inDeck, ['set_property', 'pause', false]);
 
     const fadeMs = Math.max(150, plan.fadeMs);
@@ -808,8 +834,8 @@ class DualDeckMpvPlayer {
       const progress = Math.min(1, elapsed / fadeMs);
       const gains = SmartDjAutomixManager.calculateAutomixGains(progress, plan.bassSwapFraction, plan.style);
 
-      await this.sendDeckCommand(outDeck, ['set_property', 'volume', Math.round(gains.outgoingGain * this.masterVolume)]);
-      await this.sendDeckCommand(inDeck, ['set_property', 'volume', Math.round(gains.incomingGain * this.masterVolume)]);
+      await this.sendDeckCommand(outDeck, ['set_property', 'volume', this.mpvVolume(gains.outgoingGain)]);
+      await this.sendDeckCommand(inDeck, ['set_property', 'volume', this.mpvVolume(gains.incomingGain)]);
 
       if (plan.style === 'DJ_BLEND' && this.smartDjEnabled) {
         const warp = SmartDjAutomixManager.calculateTempoWarpParameters(progress, outRhythm.bpm, inRhythm.bpm);
@@ -835,7 +861,7 @@ class DualDeckMpvPlayer {
         outDeck.lowpassHz = undefined;
 
         inDeck.bassCut = false;
-        await this.sendDeckCommand(inDeck, ['set_property', 'volume', this.masterVolume]);
+        await this.sendDeckCommand(inDeck, ['set_property', 'volume', this.mpvVolume()]);
         await this.sendDeckCommand(inDeck, ['set_property', 'speed', this.currentSpeed]);
         await this.applyFiltersToDeck(inDeck);
 
@@ -848,7 +874,7 @@ class DualDeckMpvPlayer {
         this.loadSponsorBlockSegments(inData.meta.id).catch(() => {});
 
         if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-          this.mainWindow.webContents.send('player:automixTransition', { nextTrackId: inData.meta.id });
+          this.mainWindow.webContents.send('player:automixTransition', { nextTrackId: inData.meta.id, spotifyId: inData.meta.spotifyId });
         }
       }
     }, 65);
@@ -905,11 +931,16 @@ class DualDeckMpvPlayer {
     await this.sendDeckCommand(d, ['set_property', 'time-pos', d.position]);
   }
 
+  private mpvVolume(fadeGain = 1): number {
+    const gain = this.exponentialVolume ? this.volume ** 1.35 : this.volume;
+    // mpv cubes its volume property to obtain amplitude. Apply fades in the amplitude domain.
+    return 100 * Math.cbrt(gain * fadeGain);
+  }
+
   public async setVolume(vol0to1: number): Promise<void> {
-    const clamped = Math.max(0, Math.min(1, vol0to1));
-    const effective = this.exponentialVolume ? Math.pow(clamped, 1.65) : clamped;
-    this.masterVolume = Math.round(effective * 100);
-    if (!this.isAutomixing) await this.sendDeckCommand(this.getActiveDeck(), ['set_property', 'volume', this.masterVolume]);
+    if (!Number.isFinite(vol0to1)) return;
+    this.volume = Math.max(0, Math.min(1, vol0to1));
+    if (!this.isAutomixing) await this.sendDeckCommand(this.getActiveDeck(), ['set_property', 'volume', this.mpvVolume()]);
   }
 
   public setAbLoop(a: number | null, b: number | null): { a: number | null; b: number | null } {
@@ -940,7 +971,7 @@ class DualDeckMpvPlayer {
     if (opts.audioCompressor !== undefined) this.compressorEnabled = opts.audioCompressor;
     if (opts.exponentialVolume !== undefined) {
       this.exponentialVolume = opts.exponentialVolume;
-      await this.setVolume(getDb().settings.volume ?? 0.85);
+      await this.setVolume(this.volume);
     }
     await this.applyFiltersToDeck(this.getActiveDeck());
   }
@@ -1004,19 +1035,18 @@ class DualDeckMpvPlayer {
     this.emitSleepUpdate();
 
     if (this.sleepTimerEndMs) {
-      const origVol = this.masterVolume;
       this.sleepInterval = setInterval(async () => {
         if (!this.sleepTimerEndMs) return;
         const remMs = this.sleepTimerEndMs - Date.now();
         if (remMs <= 8000 && remMs > 0) {
-          await this.sendDeckCommand(this.getActiveDeck(), ['set_property', 'volume', Math.round((remMs / 8000) * origVol)]);
+          await this.sendDeckCommand(this.getActiveDeck(), ['set_property', 'volume', this.mpvVolume(remMs / 8000)]);
         }
         if (remMs <= 0) {
           clearInterval(this.sleepInterval!);
           this.sleepInterval = null;
           this.sleepTimerEndMs = null;
           await this.pause();
-          await this.sendDeckCommand(this.getActiveDeck(), ['set_property', 'volume', origVol]);
+          await this.sendDeckCommand(this.getActiveDeck(), ['set_property', 'volume', this.mpvVolume()]);
           this.emitToast('Таймер сна: воспроизведение остановлено', 'info');
         }
         this.emitSleepUpdate();
@@ -1031,7 +1061,7 @@ class DualDeckMpvPlayer {
       isPlaying: !d.paused,
       position: d.position,
       duration: d.duration,
-      volume: this.masterVolume / 100,
+      volume: this.volume,
       speed: this.currentSpeed,
       pitchSemitones: this.pitchSemitones,
       currentUrl: d.currentUrl,
@@ -1104,38 +1134,91 @@ export function setupPlayerIPC(win?: BrowserWindow): void {
     return auditTrackAcousticQuality(target);
   });
 
-  // Download + FFmpeg Audio Tagger + .lrc writer
-  ipcMain.handle('player:downloadTrack', async (_e, track: { id: string; title: string; artist: string; album?: string; thumbnail?: string; streamUrl?: string; lrc?: string }) => {
+  const runFile = promisify(execFile);
+  const encoders = {
+    mp3: ['-c:a', 'libmp3lame', '-b:a', '320k'],
+    flac: ['-c:a', 'flac'],
+    opus: ['-c:a', 'libopus', '-b:a', '192k'],
+  };
+  ipcMain.handle('player:downloadTrack', async (_event, track: {
+    id: string; title: string; artist: string; album?: string; duration?: number;
+    source?: string; path?: string; spotifyUri?: string; streamUrl?: string; headers?: Record<string, string>;
+    format?: 'mp3' | 'flac' | 'opus'; lrc?: string;
+  }) => {
     const settings = getDb().settings;
-    const dlDir = settings.downloadPath || path.join(app.getPath('music'), 'ArchiveTune Downloads');
-    if (!fs.existsSync(dlDir)) fs.mkdirSync(dlDir, { recursive: true });
-    const safeName = `${track.artist} - ${track.title}`.replace(/[\\/:*?"<>|]/g, '_');
-    const format = settings.downloadFormat || 'flac';
-    const outPath = path.join(dlDir, `${safeName}.${format}`);
-
-    if (track.lrc && settings.embedMetadataAndLyrics) {
-      fs.writeFileSync(path.join(dlDir, `${safeName}.lrc`), track.lrc, 'utf-8');
-    }
-
-    const inputSource = track.streamUrl || `https://www.youtube.com/watch?v=${track.id}`;
-    return new Promise((resolve) => {
-      if (track.streamUrl) {
-        const ffArgs = ['-y', '-i', track.streamUrl, '-vn', '-metadata', `title=${track.title}`, '-metadata', `artist=${track.artist}`];
-        if (track.album) ffArgs.push('-metadata', `album=${track.album}`);
-        if (format === 'mp3') ffArgs.push('-c:a', 'libmp3lame', '-b:a', '320k');
-        else if (format === 'flac') ffArgs.push('-c:a', 'flac');
-        else ffArgs.push('-c:a', 'libopus', '-b:a', '192k');
-        ffArgs.push(outPath);
-        execFile('ffmpeg', ffArgs, { timeout: 120000 }, (err) => {
-          if (err) resolve({ ok: false, error: err.message });
-          else resolve({ ok: true, filePath: outPath });
-        });
-      } else {
-        execFile('yt-dlp', ['-x', '--audio-format', format, '--embed-thumbnail', '--add-metadata', '-o', path.join(dlDir, `${safeName}.%(ext)s`), inputSource], { timeout: 120000 }, (err) => {
-          if (err) resolve({ ok: false, error: err.message });
-          else resolve({ ok: true, filePath: outPath });
-        });
+    const requestedFormat = track.format ?? settings.downloadFormat;
+    const format = requestedFormat === 'mp3' || requestedFormat === 'opus' ? requestedFormat : 'flac';
+    const directory = settings.downloadPath || path.join(app.getPath('music'), 'ArchiveTune Downloads');
+    const name = Array.from(`${track.artist} - ${track.title}`.replace(/[\\/:*?"<>|\x00-\x1f%]/g, '_')).slice(0, 75).join('').trim();
+    const filePath = path.join(directory, `${name}.${format}`);
+    let temporaryDir: string | undefined;
+    try {
+      let url = track.streamUrl;
+      let headers = track.headers;
+      const prefix = track.id.split(':', 1)[0];
+      const knownSources = ['spotify', 'soundcloud', 'youtube', 'tidal', 'qobuz', 'deezer', 'jiosaavn'];
+      const source = track.source || (track.path && !track.path.startsWith('http') ? 'local' : knownSources.includes(prefix) ? prefix : 'youtube');
+      if (!url) {
+        const resolved = await resolveUniversalStream({ ...track, source });
+        url = resolved.streamUrl || undefined;
+        headers = resolved.headers;
       }
-    });
+      await fs.promises.mkdir(directory, { recursive: true });
+      temporaryDir = await fs.promises.mkdtemp(path.join(directory, '.archivetune-'));
+      const audio = path.join(temporaryDir, `audio.${format}`);
+      const options = { timeout: 180000 };
+      if (url) {
+        const args = ['-nostdin', '-v', 'error', '-y'];
+        if (/^https?:/i.test(url) && headers && Object.keys(headers).length) {
+          args.push('-headers', Object.entries(headers).map(([key, value]) => `${key}: ${value}\r\n`).join(''));
+        }
+        args.push('-i', url, '-map', '0:a:0', '-vn');
+        if (settings.embedMetadataAndLyrics) {
+          args.push('-metadata', `title=${track.title}`, '-metadata', `artist=${track.artist}`);
+          if (track.album) args.push('-metadata', `album=${track.album}`);
+        }
+        args.push(...encoders[format], audio);
+        try {
+          await runFile('ffmpeg', args, options);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+            return { ok: false, error: 'FFmpeg не установлен' };
+          }
+          return { ok: false, error: 'FFmpeg не удалось сохранить аудио из выбранного источника' };
+        }
+      } else {
+        const id = track.id.replace(/^youtube:/, '');
+        if ((source !== 'youtube' && !track.id.startsWith('youtube:')) || !/^[A-Za-z0-9_-]{11}$/.test(id)) {
+          return { ok: false, error: 'Не найден доступный аудиопоток для скачивания' };
+        }
+        const args = ['-x', '--audio-format', format, '-o', path.join(temporaryDir, 'audio.%(ext)s')];
+        if (format === 'mp3') args.push('--audio-quality', '320K');
+        if (settings.embedMetadataAndLyrics) args.push('--embed-thumbnail', '--add-metadata');
+        try {
+          await runFile('yt-dlp', [...args, '--', `https://www.youtube.com/watch?v=${id}`], options);
+        } catch (error) {
+          return {
+            ok: false,
+            error: (error as NodeJS.ErrnoException).code === 'ENOENT'
+              ? 'yt-dlp не установлен'
+              : 'YouTube не предоставил аудио для скачивания',
+          };
+        }
+      }
+      if (!(await fs.promises.stat(audio)).size) return { ok: false, error: 'Загруженный аудиофайл пуст' };
+      await fs.promises.rename(audio, filePath);
+      if (track.lrc && settings.embedMetadataAndLyrics) {
+        try {
+          await fs.promises.writeFile(path.join(directory, `${name}.lrc`), track.lrc, 'utf8');
+        } catch {
+          return { ok: true, filePath, warning: 'Не удалось сохранить текст песни' };
+        }
+      }
+      return { ok: true, filePath };
+    } catch {
+      return { ok: false, error: 'Не удалось записать аудиофайл в папку загрузок' };
+    } finally {
+      if (temporaryDir) await fs.promises.rm(temporaryDir, { recursive: true, force: true }).catch(() => {});
+    }
   });
 }

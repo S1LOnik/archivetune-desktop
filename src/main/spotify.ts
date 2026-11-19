@@ -11,6 +11,7 @@
 
 import { app, ipcMain, BrowserWindow, session } from 'electron';
 import https from 'https';
+import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -150,9 +151,29 @@ function httpGet(url: string, headers: Record<string, string> = {}): Promise<str
   });
 }
 
-async function refreshWebTokenSilently(): Promise<string> {
+let webTokenRefresh: Promise<string> | undefined;
+
+function refreshWebTokenSilently(): Promise<string> {
+  return webTokenRefresh ??= refreshWebToken().finally(() => { webTokenRefresh = undefined; });
+}
+
+async function refreshWebToken(): Promise<string> {
+  const authSession = session.fromPartition('persist:spotify', { cache: true });
+  const savedCookie = getStoredConfig().spDc;
+  if (savedCookie && !(await authSession.cookies.get({ url: 'https://open.spotify.com', name: 'sp_dc' })).length) {
+    await authSession.cookies.set({
+      url: 'https://open.spotify.com',
+      domain: '.spotify.com',
+      name: 'sp_dc',
+      value: savedCookie,
+      path: '/',
+      httpOnly: true,
+      secure: true,
+      sameSite: 'no_restriction',
+    });
+  }
+
   return new Promise((resolve, reject) => {
-    const authSession = session.fromPartition('persist:spotify', { cache: true });
     authSession.setUserAgent(USER_AGENT);
     let resolved = false;
 
@@ -226,7 +247,7 @@ async function refreshWebTokenSilently(): Promise<string> {
               const s = document.getElementById('session') || document.querySelector('script[data-testid="session"]');
               if (s && s.textContent) {
                 const parsed = JSON.parse(s.textContent);
-                if (parsed && parsed.accessToken) return parsed.accessToken;
+                if (parsed?.accessToken && parsed.isAnonymous !== true) return parsed.accessToken;
               }
             } catch (e) {}
             try {
@@ -251,16 +272,16 @@ async function refreshWebTokenSilently(): Promise<string> {
   });
 }
 
-export async function getValidSpotifyTokenOrNull(): Promise<string | null> {
+export async function getValidSpotifyTokenOrNull(rejectedToken?: string): Promise<string | null> {
   const cfg = getStoredConfig();
   if (!cfg.accessToken && !cfg.spDc) return null;
-  if (cfg.accessToken && cfg.expiresAt && Date.now() < cfg.expiresAt - 60000) {
+  if (cfg.accessToken && cfg.accessToken !== rejectedToken && cfg.expiresAt && Date.now() < cfg.expiresAt - 60000) {
     return cfg.accessToken;
   }
   try {
     return await refreshWebTokenSilently();
   } catch {
-    return cfg.accessToken ?? null;
+    return cfg.accessToken !== rejectedToken && cfg.expiresAt && Date.now() < cfg.expiresAt ? cfg.accessToken ?? null : null;
   }
 }
 
@@ -275,6 +296,7 @@ async function getValidToken(): Promise<string> {
 const SPOTIFY_GQL_URL = 'https://api-partner.spotify.com/pathfinder/v2/query';
 
 const SPOTIFY_GQL_HASHES: Record<string, string> = {
+  home: '5fb7da7a03ee2776c0670856609cb85a189a3cecc36cc160b91cde79063b9cf1',
   profileAttributes: '53bcb064f6cd18c23f752bc324a791194d20df612d8e1239c735144ab0399ced',
   fetchLibraryTracks: '087278b20b743578a6262c2b0b4bcd20d879c503cc359a2285baf083ef944240',
   libraryV3: '973e511ca44261fda7eebac8b653155e7caee3675abb4fb110cc1b8c78b091c3',
@@ -1245,4 +1267,101 @@ export function setupSpotifyIPC(): void {
       }
     }
   );
+
+  ipcMain.handle('spotify:getPersonalizedHome', async (_e, forceRefresh = false) => {
+    return spotifyGetPersonalizedHome(forceRefresh);
+  });
+}
+
+let spotifyHomeCache: { accountId: string; fetchedAt: number; tracks: PersistedTrack[] } | null = null;
+const SPOTIFY_HOME_CACHE_TTL = 15 * 60 * 1000;
+
+export async function spotifyGetPersonalizedHome(forceRefresh = false): Promise<PersistedTrack[]> {
+  const cfg = getStoredConfig();
+  const credential = cfg.spDc || cfg.accessToken;
+  if (!credential) return [];
+  const accountId = cfg.user?.id || createHash('sha256').update(credential).digest('hex');
+  const cached = spotifyHomeCache?.accountId === accountId ? spotifyHomeCache : null;
+  if (
+    !forceRefresh &&
+    cached && Date.now() - cached.fetchedAt < SPOTIFY_HOME_CACHE_TTL
+  ) {
+    return cached.tracks;
+  }
+
+  try {
+    let timeZone = 'UTC';
+    try {
+      timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    } catch {
+      timeZone = 'UTC';
+    }
+
+    const variables = {
+      homeEndUserIntegration: 'INTEGRATION_WEB_PLAYER',
+      includeHomeChapterVideoCards: false,
+      timeZone,
+      sectionItemsLimit: 10,
+      sp_t: '',
+      facet: '',
+      includeEpisodeContentRatingsV2: false,
+    };
+
+    const res = await spotifyGqlPost('home', variables);
+    const sections: any[] = res?.data?.home?.sectionContainer?.sections?.items || [];
+
+    // Filter for "Made For You" and "Your top mixes"
+    const keywords = ['made for you', 'your top mixes', 'только для тебя', 'твои главные миксы', 'главные миксы', 'миксы для вас'];
+    const targetPlaylists = new Set<string>();
+    for (const section of sections) {
+      const title = String(section?.data?.title?.translatedBaseText || '').toLowerCase().trim();
+      const personalizedShelf = keywords.includes(title);
+      for (const item of section?.sectionItems?.items || []) {
+        const playlist = item?.content?.data;
+        if (playlist?.__typename !== 'Playlist' || !/^spotify:playlist:[A-Za-z0-9]{22}$/.test(playlist.uri || '')) continue;
+        const personalizedFormat = /^(daily-mix|discover-weekly|release-radar|(?:artist|genre|mood|decade)-mix-reader)$/.test(playlist.format || '');
+        if (!personalizedShelf && !personalizedFormat) continue;
+        targetPlaylists.add(playlist.uri);
+        if (targetPlaylists.size === 3) break;
+      }
+      if (targetPlaylists.size === 3) break;
+    }
+
+    if (targetPlaylists.size === 0) {
+      return cached?.tracks || [];
+    }
+
+    const tracksPerPlaylist = await Promise.all(
+      [...targetPlaylists].map((uri) => spotifyGetPlaylistTracks(uri))
+    );
+
+    const deduplicated: PersistedTrack[] = [];
+    const seen = new Set<string>();
+    const maxLen = Math.max(...tracksPerPlaylist.map((p) => p.length), 0);
+
+    for (let i = 0; i < maxLen; i++) {
+      for (const list of tracksPerPlaylist) {
+        const t = list[i];
+        if (!t) continue;
+        const key = (t.isrc || `${t.title}::${t.artist}`).toLowerCase().trim();
+        if (!seen.has(key) && !seen.has(t.id)) {
+          seen.add(key);
+          seen.add(t.id);
+          deduplicated.push(t);
+        }
+      }
+    }
+
+    if (!deduplicated.length) return cached?.tracks || [];
+    spotifyHomeCache = {
+      accountId,
+      fetchedAt: Date.now(),
+      tracks: deduplicated,
+    };
+
+    return deduplicated;
+  } catch (err) {
+    console.warn('[Spotify] Failed to load personalized home:', err);
+    return cached?.tracks || [];
+  }
 }

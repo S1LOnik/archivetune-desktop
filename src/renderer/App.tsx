@@ -1,11 +1,15 @@
-import React, { useEffect } from 'react';
-import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
+import React, { Suspense, lazy, useEffect, useRef } from 'react';
+import { HashRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { useShallow } from 'zustand/react/shallow';
+import { motion, AnimatePresence } from 'framer-motion';
+import { useInterfaceMotion } from './lib/useInterfaceMotion';
+import { useSpotifyLyricsId } from './lib/useSpotifyLyricsId';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Play, Pause, SkipBack, SkipForward, Heart } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import TitleBar from './components/TitleBar';
 import MiniPlayer from './components/MiniPlayer';
-import NowPlayingOverlay from './components/NowPlayingOverlay';
+import PlaybackPulse from './components/PlaybackPulse';
 import QueueDrawer from './components/QueueDrawer';
 import TrackContextMenu from './components/TrackContextMenu';
 import SourceSwitcherModal from './components/SourceSwitcherModal';
@@ -13,22 +17,22 @@ import AcousticAuditModal from './components/AcousticAuditModal';
 import TagEditorModal from './components/TagEditorModal';
 import ToastContainer from './components/ToastContainer';
 import HomePage from './pages/HomePage';
-import ExplorePage from './pages/ExplorePage';
-import AlbumPage from './pages/AlbumPage';
-import ArtistPage from './pages/ArtistPage';
-import PlaylistDetailPage from './pages/PlaylistDetailPage';
-import SearchPage from './pages/SearchPage';
-import IntegrationsPage from './pages/IntegrationsPage';
-import LibraryPage from './pages/LibraryPage';
-import TogetherPage from './pages/TogetherPage';
-import RecognitionPage from './pages/RecognitionPage';
-import StatsPage from './pages/StatsPage';
-import SettingsPage from './pages/SettingsPage';
+const NowPlayingOverlay = lazy(() => import('./components/NowPlayingOverlay'));
+const ExplorePage = lazy(() => import('./pages/ExplorePage'));
+const AlbumPage = lazy(() => import('./pages/AlbumPage'));
+const ArtistPage = lazy(() => import('./pages/ArtistPage'));
+const PlaylistDetailPage = lazy(() => import('./pages/PlaylistDetailPage'));
+const SearchPage = lazy(() => import('./pages/SearchPage'));
+const IntegrationsPage = lazy(() => import('./pages/IntegrationsPage'));
+const LibraryPage = lazy(() => import('./pages/LibraryPage'));
+const TogetherPage = lazy(() => import('./pages/TogetherPage'));
+const StatsPage = lazy(() => import('./pages/StatsPage'));
+const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 import {
   useUIStore,
   usePlayerStore,
-  useAccountsStore,
   hydrateStoresFromDatabase,
+  extractArtworkColors,
 } from './store';
 import { usePlayer, usePlayerEvents } from './lib/usePlayer';
 
@@ -38,22 +42,63 @@ const queryClient = new QueryClient({
   },
 });
 
+function AppAmbientLight() {
+  const playing = usePlayerStore((state) => state.isPlaying);
+  const enabled = useUIStore((state) => state.ambientBackgroundBlur);
+  if (!enabled) return null;
+  return <div className="app-ambient ambient-breath" data-playing={playing} aria-hidden="true" />;
+}
+
 function AppContent() {
+  const location = useLocation();
+  const { reducedMotion, panelTransition } = useInterfaceMotion();
+  const mainRef = useRef<HTMLElement>(null);
+  useEffect(() => { if (mainRef.current) mainRef.current.scrollTop = 0; }, [location.pathname]);
   usePlayerEvents();
-  const { showNowPlaying, isMiniPipMode } = useUIStore();
-  const { currentTrack, isPlaying, pause, resume, skipNext, skipPrev, toggleLikeCurrent } =
-    usePlayer();
-  const isTrackLiked = usePlayerStore((s) => s.isTrackLiked);
+  const { showNowPlaying, isMiniPipMode } = useUIStore(useShallow(({ showNowPlaying, isMiniPipMode }) => ({ showNowPlaying, isMiniPipMode })));
+  const currentTrack = usePlayerStore((s) => s.currentTrack);
+  const spotifyLyricsId = useSpotifyLyricsId(currentTrack);
+  const isPlaying = usePlayerStore((s) => isMiniPipMode && s.isPlaying);
+  const loading = usePlayerStore((s) => isMiniPipMode && s.loading);
+  const liked = usePlayerStore((s) => isMiniPipMode && s.isTrackLiked(s.currentTrack));
+  const { pause, resume, skipNext, skipPrev, toggleLikeCurrent } = usePlayer();
 
   useEffect(() => {
-    void hydrateStoresFromDatabase().then(() => {
-      void useAccountsStore.getState().refreshAllStatuses();
-    });
+    void hydrateStoresFromDatabase();
   }, []);
+
+  const { dynamicColorFromArt, seedColor, setActiveArtColor } = useUIStore(useShallow(
+    ({ dynamicColorFromArt, seedColor, setActiveArtColor }) => ({ dynamicColorFromArt, seedColor, setActiveArtColor }),
+  ));
+  const thumbnail = currentTrack?.thumbnail;
+
+  useEffect(() => {
+    if (!currentTrack || !window.electronAPI?.lyrics) return;
+    let cancelled = false;
+    const track = currentTrack;
+    void window.electronAPI.lyrics.get(track.title, track.artist, track.duration, track.id, spotifyLyricsId).then(result => {
+      if (!cancelled) window.electronAPI.desktop.updateLyrics(track.id, result.synced || []);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [currentTrack?.id, currentTrack?.title, currentTrack?.artist, currentTrack?.duration, spotifyLyricsId]);
+
+  useEffect(() => {
+    if (!dynamicColorFromArt) return;
+    if (!thumbnail) {
+      setActiveArtColor(null);
+      return;
+    }
+    let cancelled = false;
+    void extractArtworkColors(thumbnail, seedColor).then(({ color, gradients }) => {
+      if (!cancelled) setActiveArtColor(color, gradients);
+    }).catch(() => {
+      if (!cancelled) setActiveArtColor(null);
+    });
+    return () => { cancelled = true; };
+  }, [thumbnail, seedColor, dynamicColorFromArt, setActiveArtColor]);
 
   // Compact Always-on-Top Mini Widget (PiP) Overlay Mode
   if (isMiniPipMode) {
-    const liked = isTrackLiked(currentTrack);
     return (
       <div className="flex flex-col h-full bg-surface text-on-surface overflow-hidden select-none relative">
         {currentTrack?.thumbnail && (
@@ -105,9 +150,14 @@ function AppContent() {
             </button>
             <button
               onClick={() => (isPlaying ? pause() : resume())}
-              className="w-10 h-10 rounded-2xl bg-primary text-on-primary flex items-center justify-center shadow-md"
+              disabled={loading}
+              aria-busy={loading}
+              aria-label={loading ? 'Запускаем трек…' : isPlaying ? 'Пауза' : 'Воспроизвести'}
+              className="playback-trigger w-10 h-10 rounded-2xl bg-primary text-on-primary flex items-center justify-center shadow-md"
             >
-              {isPlaying ? <Pause size={18} /> : <Play size={18} className="translate-x-0.5" />}
+              <PlaybackPulse />
+              {loading ? <span className="w-4 h-4 rounded-full border-2 border-current border-t-transparent animate-spin playback-spinner" />
+                : isPlaying ? <Pause size={18} /> : <Play size={18} className="translate-x-0.5" />}
             </button>
             <button
               onClick={skipNext}
@@ -122,7 +172,8 @@ function AppContent() {
   }
 
   return (
-    <div className="flex flex-col h-full bg-surface text-on-surface overflow-hidden select-none">
+    <div className="app-shell relative isolate flex flex-col h-full bg-surface text-on-surface overflow-hidden select-none">
+      <AppAmbientLight />
       {/* Custom Titlebar */}
       <TitleBar />
 
@@ -131,24 +182,32 @@ function AppContent() {
         <Sidebar />
 
         {/* Main Content Area */}
-        <main className="app-content flex-1 overflow-y-auto overflow-x-hidden relative">
-          <Routes>
-            <Route path="/" element={<HomePage />} />
-            <Route path="/home" element={<HomePage />} />
-            <Route path="/explore" element={<ExplorePage />} />
-            <Route path="/search" element={<SearchPage />} />
-            <Route path="/library" element={<LibraryPage />} />
-            <Route path="/integrations" element={<IntegrationsPage />} />
-            <Route path="/spotify" element={<IntegrationsPage />} />
-            <Route path="/together" element={<TogetherPage />} />
-            <Route path="/recognize" element={<RecognitionPage />} />
-            <Route path="/stats" element={<StatsPage />} />
-            <Route path="/album/:id" element={<AlbumPage />} />
-            <Route path="/artist/:id" element={<ArtistPage />} />
-            <Route path="/playlist/:id" element={<PlaylistDetailPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
+        <main ref={mainRef} className="app-content flex-1 overflow-y-auto overflow-x-hidden relative">
+          <motion.div
+            key={location.pathname}
+            initial={reducedMotion ? false : { opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ ...panelTransition, opacity: { duration: reducedMotion ? 0 : 0.14 } }}
+          >
+            <Suspense fallback={<div className="p-6 text-on-surface-variant" role="status">Загрузка…</div>}>
+            <Routes location={location}>
+              <Route path="/" element={<HomePage />} />
+              <Route path="/home" element={<HomePage />} />
+              <Route path="/explore" element={<ExplorePage />} />
+              <Route path="/search" element={<SearchPage />} />
+              <Route path="/library" element={<LibraryPage />} />
+              <Route path="/integrations" element={<IntegrationsPage />} />
+              <Route path="/spotify" element={<IntegrationsPage />} />
+              <Route path="/together" element={<TogetherPage />} />
+              <Route path="/stats" element={<StatsPage />} />
+              <Route path="/album/:id" element={<AlbumPage />} />
+              <Route path="/artist/:id" element={<ArtistPage />} />
+              <Route path="/playlist/:id" element={<PlaylistDetailPage />} />
+              <Route path="/settings" element={<SettingsPage />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+            </Suspense>
+          </motion.div>
         </main>
 
         {/* Right Queue Drawer */}
@@ -159,7 +218,11 @@ function AppContent() {
       {currentTrack && <MiniPlayer />}
 
       {/* Full Now Playing Overlay */}
-      {showNowPlaying && <NowPlayingOverlay />}
+      <Suspense fallback={null}>
+        <AnimatePresence>
+          {showNowPlaying && <NowPlayingOverlay key="now-playing-overlay" />}
+        </AnimatePresence>
+      </Suspense>
 
       {/* Global Context Menu, Modals & Smart Switch Toasts */}
       <TrackContextMenu />

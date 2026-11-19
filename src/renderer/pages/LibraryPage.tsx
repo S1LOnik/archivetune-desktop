@@ -1,3 +1,5 @@
+import { useShallow } from 'zustand/react/shallow';
+import { formatCount, trackCount } from '../lib/interfaceText';
 import React, { useCallback, useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -15,7 +17,6 @@ import {
   Upload,
   Download,
   Trash2,
-  Tag,
   Ban,
   PlugZap,
   Disc3,
@@ -36,6 +37,7 @@ import {
 } from '../store';
 import { usePlayer } from '../lib/usePlayer';
 import TrackRow from '../components/TrackRow';
+import LibraryTrackList from '../components/LibraryTrackList';
 import OfflineLibrary from '../components/OfflineLibrary';
 
 type MainTab =
@@ -57,15 +59,23 @@ export default function LibraryPage() {
     playlists,
     history,
     blockedArtists,
-    setQueue,
     savePlaylist,
     deletePlaylist,
     toggleBlockArtist,
     upsertLikedSongs,
-  } = usePlayerStore();
+  } = usePlayerStore(useShallow((state) => ({
+    likedSongs: state.likedSongs,
+    playlists: state.playlists,
+    history: state.history,
+    blockedArtists: state.blockedArtists,
+    savePlaylist: state.savePlaylist,
+    deletePlaylist: state.deletePlaylist,
+    toggleBlockArtist: state.toggleBlockArtist,
+    upsertLikedSongs: state.upsertLikedSongs,
+  })));
   const { spotifyConnected, ytmConnected, scConnected, syncingAll, syncAllPlatforms } = useAccountsStore();
   const { setTagEditorTrack, pushToast } = useUIStore();
-  const { playTrack } = usePlayer();
+  const { playFromQueue } = usePlayer();
 
   const [activeTab, setActiveTab] = useState<MainTab>('liked');
   const [filterQuery, setFilterQuery] = useState('');
@@ -128,11 +138,14 @@ export default function LibraryPage() {
           mergedMap.set(t.id, t);
         }
         setTracks(Array.from(mergedMap.values()));
+      } catch (err) {
+        console.error('Library scan failed', err);
+        pushToast('Не удалось прочитать папку с музыкой.', 'error');
       } finally {
         setScanning(false);
       }
     },
-    [setTracks, setScanning]
+    [pushToast, setTracks, setScanning]
   );
 
   const handleAddDirectory = useCallback(async () => {
@@ -166,11 +179,42 @@ export default function LibraryPage() {
   }, [setTracks, setScanning]);
 
   const handleRescan = useCallback(async () => {
-    setTracks([]);
-    for (const dir of directories) {
-      await scanDirectory(dir);
+    if (!directories.length) return;
+    setScanning(true);
+    try {
+      const current = useLibraryStore.getState().tracks;
+      const results = await Promise.allSettled(directories.map(async (dir) => {
+        const scanned = await window.electronAPI?.library?.scan(dir);
+        if (!scanned) throw new Error('Library scanner unavailable');
+        return scanned.map((meta: any): Track => ({
+          ...meta,
+          id: meta.path || meta.id,
+          title: meta.title || 'Unknown Title',
+          artist: meta.artist || 'Unknown Artist',
+          duration: meta.duration || 0,
+          source: 'local',
+          path: meta.path,
+          qualityBadge: meta.qualityBadge || meta.format || 'LOCAL',
+        }));
+      }));
+      const succeeded = directories.filter((_, i) => results[i].status === 'fulfilled');
+      const belongsTo = (path: string, dir: string) => {
+        const normalized = dir.replace(/[\\/]+$/, '');
+        return path === normalized || path.startsWith(`${normalized}/`) || path.startsWith(`${normalized}\\`);
+      };
+      // Keep separately imported files and the previous contents of failed folders.
+      const merged = new Map(current.filter((track) => !track.path || !succeeded.some((dir) => belongsTo(track.path!, dir))).map((track) => [track.id, track]));
+      for (const result of results) {
+        if (result.status === 'fulfilled') for (const track of result.value) merged.set(track.id, track);
+      }
+      setTracks(Array.from(merged.values()));
+      if (results.some((result) => result.status === 'rejected')) {
+        pushToast('Не удалось обновить некоторые папки. Прежние треки сохранены.', 'error');
+      }
+    } finally {
+      setScanning(false);
     }
-  }, [directories, scanDirectory, setTracks]);
+  }, [directories, pushToast, setScanning, setTracks]);
 
   // Platform data loaders
   const loadSpotifyTab = useCallback(async () => {
@@ -391,8 +435,7 @@ export default function LibraryPage() {
 
   const handlePlayList = (list: Track[]) => {
     if (list.length === 0) return;
-    setQueue(list, 0);
-    void playTrack(list[0]);
+    void playFromQueue(list);
   };
 
   const handleCreatePlaylist = (e: React.FormEvent) => {
@@ -461,23 +504,22 @@ export default function LibraryPage() {
   const tabs: Array<{ id: MainTab; label: string; count?: number; badge?: string }> = [
     { id: 'liked', label: 'Любимые', count: likedSongs.length },
     { id: 'playlists', label: 'Плейлисты', count: playlists.length },
-    { id: 'local', label: 'Локальные', count: tracks.length },
-    { id: 'offline', label: 'Офлайн' },
+    { id: 'local', label: 'На устройстве', count: tracks.length },
+    { id: 'offline', label: 'Загрузки' },
     { id: 'history', label: 'История', count: history.length },
-    { id: 'blocked', label: 'Чёрный список', count: blockedArtists.length },
+    { id: 'blocked', label: 'Скрытые артисты', count: blockedArtists.length },
     { id: 'spotify', label: 'Spotify', badge: spotifyConnected ? 'ON' : undefined },
     { id: 'ytmusic', label: 'YouTube Music', badge: ytmConnected ? 'ON' : undefined },
     { id: 'soundcloud', label: 'SoundCloud', badge: scConnected ? 'ON' : undefined },
   ];
 
   return (
-    <div className="p-6 space-y-6 pb-28">
-      {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-4">
+    <div className="screen">
+      <header className="screen-header">
         <div>
-          <h1 className="text-2xl font-black text-on-surface tracking-tight">Медиатека &amp; Платформы</h1>
-          <p className="text-xs text-on-surface-variant mt-0.5">
-            {likedSongs.length} любимых • {playlists.length} плейлистов • {tracks.length} локальных • Spotify + YouTube Music + SoundCloud
+          <h1>Медиатека</h1>
+          <p className="screen-description">
+            {trackCount(likedSongs.length)} в любимых · {formatCount(playlists.length, 'плейлист', 'плейлиста', 'плейлистов')}
           </p>
         </div>
 
@@ -498,7 +540,7 @@ export default function LibraryPage() {
               onClick={() => handlePlayList(activeTrackList)}
               className="flex items-center gap-2 px-4 py-2 rounded-xl bg-primary text-on-primary hover:opacity-90 text-xs font-bold shadow-md shadow-primary/20"
             >
-              <Play size={14} fill="currentColor" /> Играть ({activeTrackList.length})
+              <Play size={14} fill="currentColor" /> Слушать ({activeTrackList.length})
             </button>
           )}
           {activeTab === 'local' && (
@@ -527,16 +569,17 @@ export default function LibraryPage() {
             </>
           )}
         </div>
-      </div>
+      </header>
 
       {/* Main Navigation Tabs (Unified + Spotify + YTM + SC) + Filter */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+        <div className="library-tabs flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
           {tabs.map((tab) => {
             const active = activeTab === tab.id;
             return (
               <button
                 key={tab.id}
+                aria-pressed={active}
                 onClick={() => {
                   setActiveTab(tab.id);
                   if (tab.id !== 'playlists') setSelectedPlaylistId(null);
@@ -563,14 +606,15 @@ export default function LibraryPage() {
           })}
         </div>
 
-        <div className="flex items-center gap-2 bg-surface-container px-3 py-1.5 rounded-xl min-w-[200px]">
+        <div className="search-field flex items-center gap-2 bg-surface-container px-3 py-2.5 rounded-xl w-full sm:w-72">
           <Search size={14} className="text-on-surface-variant" />
           <input
             type="text"
             value={filterQuery}
             onChange={(e) => setFilterQuery(e.target.value)}
-            placeholder="Фильтр…"
-            className="bg-transparent text-xs text-on-surface placeholder-on-surface-variant outline-none w-full"
+            aria-label="Фильтр медиатеки"
+            placeholder="Фильтр по названию или артисту…"
+            className="search-input bg-transparent text-xs text-on-surface placeholder-on-surface-variant outline-none w-full"
           />
         </div>
       </div>
@@ -579,7 +623,7 @@ export default function LibraryPage() {
       {scanning && (
         <div className="flex items-center gap-3 text-on-surface-variant bg-surface-container rounded-xl p-4">
           <RefreshCw size={16} className="animate-spin text-primary" />
-          <span className="text-sm">Сканирование аудио-файлов и ID3/FLAC метаданных…</span>
+          <span className="text-sm">Ищем аудиофайлы и считываем теги…</span>
         </div>
       )}
 
@@ -625,24 +669,11 @@ export default function LibraryPage() {
           )}
 
           {activeTrackList.length > 0 ? (
-            <div className="space-y-1">
-              {activeTrackList.map((track, i) => (
-                <div key={`${activeTab}-${track.id}-${i}`} className="flex items-center gap-2 group">
-                  <div className="flex-1 min-w-0">
-                    <TrackRow track={track} index={i} showIndex queue={activeTrackList} />
-                  </div>
-                  {activeTab === 'local' && track.path && (
-                    <button
-                      onClick={() => setTagEditorTrack(track)}
-                      title="Редактор тегов ID3 / FLAC"
-                      className="p-2 rounded-xl bg-surface-container hover:bg-primary/15 text-on-surface-variant hover:text-primary transition-colors opacity-70 group-hover:opacity-100"
-                    >
-                      <Tag size={14} />
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
+            <LibraryTrackList
+              key={activeTab}
+              tracks={activeTrackList}
+              onEditTags={activeTab === 'local' ? setTagEditorTrack : undefined}
+            />
           ) : !scanning ? (
             <div className="flex flex-col items-center justify-center py-20 text-on-surface-variant gap-4 bg-surface-container/40 rounded-3xl">
               {activeTab === 'liked' ? (
@@ -874,17 +905,7 @@ export default function LibraryPage() {
                   <span>Загрузка треков плейлиста из {selectedPlaylist.source.toUpperCase()}…</span>
                 </div>
               ) : (
-                <div className="space-y-1">
-                  {filterTracks(selectedPlaylist.tracks).map((t, i) => (
-                    <TrackRow
-                      key={`${selectedPlaylist.id}-${t.id}-${i}`}
-                      track={t}
-                      index={i}
-                      showIndex
-                      queue={selectedPlaylist.tracks}
-                    />
-                  ))}
-                </div>
+                <LibraryTrackList key={selectedPlaylist.id} tracks={activeTrackList} />
               )}
             </div>
           ) : filteredPlaylists.length > 0 ? (
@@ -930,7 +951,7 @@ export default function LibraryPage() {
             <div className="text-center py-16 text-on-surface-variant">
               <ListMusic size={40} className="mx-auto mb-3 text-primary/40" />
               <p className="text-sm font-semibold">Плейлистов пока нет</p>
-              <p className="text-xs mt-1">Создайте свой или импортируйте из Spotify / YouTube / SoundCloud по ссылке.</p>
+              <p className="text-xs mt-1">Создайте плейлист или импортируйте его по ссылке.</p>
             </div>
           )}
         </div>
@@ -962,8 +983,8 @@ export default function LibraryPage() {
           ) : (
             <div className="text-center py-16 text-on-surface-variant">
               <Ban size={40} className="mx-auto mb-3 text-primary/40" />
-              <p className="text-sm font-semibold">Чёрный список артистов пуст</p>
-              <p className="text-xs mt-1">Нажмите правой кнопкой мыши по любому треку, чтобы скрыть артиста.</p>
+              <p className="text-sm font-semibold">Скрытых артистов пока нет</p>
+              <p className="text-xs mt-1">Чтобы скрыть артиста, откройте меню его трека.</p>
             </div>
           )}
         </div>
@@ -1037,14 +1058,14 @@ export default function LibraryPage() {
                 </div>
               ) : spSubTab === 'liked' ? (
                 <div className="space-y-1">
-                  {filterTracks(spTracks).map((t, i) => (
-                    <TrackRow key={`sp-liked-${t.id}-${i}`} track={t} index={i} showIndex queue={spTracks} />
+                  {filterTracks(spTracks).map((t, i, filtered) => (
+                    <TrackRow key={`sp-liked-${t.id}-${i}`} track={t} index={i} showIndex queue={filtered} />
                   ))}
                 </div>
               ) : spSubTab === 'top' ? (
                 <div className="space-y-1">
-                  {filterTracks(spTopTracks).map((t, i) => (
-                    <TrackRow key={`sp-top-${t.id}-${i}`} track={t} index={i} showIndex queue={spTopTracks} />
+                  {filterTracks(spTopTracks).map((t, i, filtered) => (
+                    <TrackRow key={`sp-top-${t.id}-${i}`} track={t} index={i} showIndex queue={filtered} />
                   ))}
                 </div>
               ) : spSubTab === 'playlists' ? (
@@ -1208,8 +1229,8 @@ export default function LibraryPage() {
                 </div>
               ) : ytmSubTab === 'liked' ? (
                 <div className="space-y-1">
-                  {filterTracks(ytmTracks).map((t, i) => (
-                    <TrackRow key={`ytm-liked-${t.id}-${i}`} track={t} index={i} showIndex queue={ytmTracks} />
+                  {filterTracks(ytmTracks).map((t, i, filtered) => (
+                    <TrackRow key={`ytm-liked-${t.id}-${i}`} track={t} index={i} showIndex queue={filtered} />
                   ))}
                 </div>
               ) : ytmSubTab === 'playlists' ? (

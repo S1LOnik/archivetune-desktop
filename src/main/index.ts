@@ -16,7 +16,6 @@ import { setupTagEditorIPC } from './tagEditor';
 import { desktopIntegration } from './desktop';
 import { setupTogetherIPC, togetherManager } from './together';
 import { setupPlaylistsIoIPC } from './playlists_io';
-import { setupRecognitionIPC } from './recognition';
 
 // Enable smooth Wayland/X11 GPU rendering on Linux (with user fallback setting)
 const initialSettings = getDb().settings;
@@ -142,7 +141,6 @@ app.whenReady().then(() => {
   setupTagEditorIPC();
   setupTogetherIPC(mainWindow ?? undefined);
   setupPlaylistsIoIPC(mainWindow ?? undefined);
-  setupRecognitionIPC(mainWindow ?? undefined);
 
   if (mainWindow) {
     desktopIntegration.init(mainWindow);

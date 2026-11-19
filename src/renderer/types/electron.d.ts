@@ -82,6 +82,7 @@ export interface ProviderLatencyInfo {
 
 export interface SmartStreamResolution {
   streamUrl: string | null;
+  spotifyId?: string;
   headers?: Record<string, string>;
   actualSource: AudioSourceId | 'local';
   originalSource: string;
@@ -215,6 +216,9 @@ export interface AppSettings {
   prebufferNextTrack: boolean;
   compactTrackRows: boolean;
   ambientBackgroundBlur: boolean;
+  reduceInterfaceMotion: boolean;
+  interfaceMotionPreset: 'balanced' | 'snappy' | 'bouncy' | 'smooth';
+  glassEffect: 'off' | 'soft' | 'full';
   replayGainMode: 'off' | 'track' | 'album';
   targetLoudnessLufs: number;
   keyboardShortcutsEnabled: boolean;
@@ -228,15 +232,20 @@ declare global {
       close: () => void;
       toggleMiniMode: () => Promise<boolean>;
       onMiniModeChanged: (cb: (isMini: boolean) => void) => () => void;
-      onMediaShortcut: (cb: (action: 'playPause' | 'next' | 'prev') => void) => () => void;
+      onMediaShortcut: (cb: (action: 'playPause' | 'play' | 'pause' | 'next' | 'prev') => void) => () => void;
       updateDiscordPresence: (trackInfo: object | null) => Promise<{ ok: boolean }>;
       openExternal: (url: string) => void;
+      onMediaSeek: (cb: (event: { position?: number; offset?: number }) => void) => () => void;
       desktop: {
+        updatePlaybackMode: (mode: { shuffle: boolean; repeat: string }) => void;
+        onPlaybackMode: (cb: (mode: { shuffle?: boolean; repeat?: 'none' | 'one' | 'all' }) => void) => () => void;
+        updateLyrics: (trackId: string, lines: Array<{ time: number; text: string }>) => void;
+        updatePosition: (position: number, seeked?: boolean) => void;
         updatePresence: (trackInfo: object | null) => Promise<{ ok: boolean }>;
         listenBrainzNowPlaying: (trackInfo: object) => Promise<{ ok: boolean }>;
         listenBrainzScrobble: (trackInfo: object) => Promise<{ ok: boolean }>;
         toggleLocalApi: (enabled: boolean) => Promise<{ ok: boolean; enabled: boolean }>;
-        extractPalette: (imageUrl: string) => Promise<{ primary: string; secondary: string; surface: string; isMonochrome: boolean } | null>;
+        readArtworkThumbnail: (imageUrl: string) => Promise<string | null>;
       };
       db: {
         getInitialState: () => Promise<any>;
@@ -286,12 +295,12 @@ declare global {
         setSleepTimer: (minutes: number | null, afterTrack?: boolean) => Promise<void>;
         setAbLoop: (a: number | null, b: number | null) => Promise<{ a: number | null; b: number | null }>;
         auditQuality: (urlOrPath?: string) => Promise<AcousticAuditResult | null>;
-        downloadTrack: (track: object) => Promise<{ ok: boolean; filePath?: string; error?: string }>;
+        downloadTrack: (track: Track & { format?: 'mp3' | 'flac' | 'opus'; lrc?: string }) => Promise<{ ok: boolean; filePath?: string; error?: string; warning?: string }>;
         getStatus: () => Promise<any>;
-        onRecovery: (cb: (info: { trackId: string; loading: boolean; error?: string; source?: string; badge?: string; lossless?: boolean }) => void) => () => void;
+        onRecovery: (cb: (info: { trackId: string; loading: boolean; error?: string; source?: string; badge?: string; lossless?: boolean; spotifyId?: string }) => void) => () => void;
         onProgress: (cb: (info: any) => void) => () => void;
         onEnded: (cb: () => void) => () => void;
-        onAutomixTransition: (cb: (info: { nextTrackId: string }) => void) => () => void;
+        onAutomixTransition: (cb: (info: { nextTrackId: string; spotifyId?: string }) => void) => () => void;
         onAutomixPlan: (cb: (plan: AutoMixPlan | null) => void) => () => void;
         onSmartToast: (cb: (toast: { message: string; kind: string; timestamp: number }) => void) => () => void;
         onSleepTimerUpdate: (cb: (info: { remainingSec: number; afterTrack: boolean }) => void) => () => void;
@@ -357,6 +366,7 @@ declare global {
         toggleLike: (spotifyTrackId: string, like: boolean) => Promise<{ ok: boolean }>;
         search: (query: string, limit?: number) => Promise<Track[]>;
         resolveTrack: (track: object) => Promise<any>;
+        getPersonalizedHome: (forceRefresh?: boolean) => Promise<Track[]>;
       };
       ytmAuth: {
         getStatus: () => Promise<{
@@ -398,7 +408,7 @@ declare global {
         getMetadata: (filePath: string) => Promise<Track | null>;
       };
       lyrics: {
-        get: (title: string, artist: string, duration: number, videoId?: string) => Promise<any>;
+        get: (title: string, artist: string, duration: number, trackId?: string, spotifyId?: string) => Promise<any>;
         searchCandidates: (query: string) => Promise<any[]>;
       };
       canvas: {

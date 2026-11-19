@@ -162,85 +162,23 @@ function submitListenBrainz(listenType: 'playing_now' | 'single', info: TrackPre
   req.end();
 }
 
-export async function extractPaletteFromArtwork(urlOrPath: string): Promise<{
-  primary: string;
-  secondary: string;
-  surface: string;
-  isMonochrome: boolean;
-} | null> {
+async function readArtworkThumbnail(urlOrPath: string): Promise<string | null> {
+  if (!urlOrPath) return null;
   try {
-    if (!urlOrPath) return null;
-    let buf: Buffer | null = null;
-    if (urlOrPath.startsWith('http://') || urlOrPath.startsWith('https://')) {
-      const res = await fetch(urlOrPath, {
+    let image: Electron.NativeImage;
+    if (/^https?:\/\//.test(urlOrPath)) {
+      const response = await fetch(urlOrPath, {
         headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) ArchiveTune/2.0' },
+        signal: AbortSignal.timeout(5000),
       });
-      if (!res.ok) return null;
-      const ab = await res.arrayBuffer();
-      buf = Buffer.from(ab);
-    } else if (urlOrPath.startsWith('file://')) {
-      const clean = fileURLToPath(urlOrPath);
-      if (fs.existsSync(clean)) buf = fs.readFileSync(clean);
-    } else if (fs.existsSync(urlOrPath)) {
-      buf = fs.readFileSync(urlOrPath);
+      if (!response.ok) return null;
+      image = nativeImage.createFromBuffer(Buffer.from(await response.arrayBuffer()));
+    } else {
+      const file = urlOrPath.startsWith('file://') ? fileURLToPath(urlOrPath) : urlOrPath;
+      image = nativeImage.createFromBuffer(await fs.promises.readFile(file));
     }
-    if (!buf || buf.length === 0) return null;
-
-    const img = nativeImage.createFromBuffer(buf);
-    if (img.isEmpty()) return null;
-    const thumb = img.resize({ width: 32, height: 32, quality: 'good' });
-    const raw = thumb.getBitmap();
-
-    let bestR = 203;
-    let bestG = 185;
-    let bestB = 245;
-    let maxSaturation = -1;
-    let totalLuminance = 0;
-    let validPixels = 0;
-
-    for (let i = 0; i < raw.length; i += 4) {
-      const b = raw[i];
-      const g = raw[i + 1];
-      const r = raw[i + 2];
-      const a = raw[i + 3];
-      if (a < 128) continue;
-
-      const max = Math.max(r, g, b);
-      const min = Math.min(r, g, b);
-      const delta = max - min;
-      const lum = (max + min) / 510;
-      const sat = max === 0 ? 0 : delta / max;
-
-      totalLuminance += lum;
-      validPixels++;
-
-      if (lum > 0.15 && lum < 0.88 && sat > maxSaturation) {
-        maxSaturation = sat;
-        bestR = r;
-        bestG = g;
-        bestB = b;
-      }
-    }
-
-    const isMonochrome = maxSaturation < 0.12;
-
-    if (isMonochrome) {
-      const avgLum = validPixels > 0 ? totalLuminance / validPixels : 0.5;
-      const primary = avgLum > 0.5 ? '#cbd5e1' : '#94a3b8';
-      const secondary = '#64748b';
-      const surface = '#0f172a';
-      return { primary, secondary, surface, isMonochrome: true };
-    }
-
-    const boostR = Math.min(255, Math.round(bestR * 1.05 + 15));
-    const boostG = Math.min(255, Math.round(bestG * 1.05 + 15));
-    const boostB = Math.min(255, Math.round(bestB * 1.05 + 15));
-    const toHex = (n: number) => n.toString(16).padStart(2, '0');
-    const primary = `#${toHex(boostR)}${toHex(boostG)}${toHex(boostB)}`;
-    const secondary = `#${toHex(Math.round(bestR * 0.75))}${toHex(Math.round(bestG * 0.75))}${toHex(Math.round(bestB * 0.75))}`;
-    const surface = `#${toHex(Math.round(bestR * 0.12))}${toHex(Math.round(bestG * 0.12))}${toHex(Math.round(bestB * 0.12))}`;
-
-    return { primary, secondary, surface, isMonochrome: false };
+    if (image.isEmpty()) return null;
+    return image.resize({ width: 128, height: 128, quality: 'good' }).toDataURL();
   } catch {
     return null;
   }
@@ -253,6 +191,8 @@ export class DesktopIntegration {
   private mprisPlayer: any = null;
   private localApiServer: http.Server | null = null;
   private lastPresence: TrackPresenceInfo | null = null;
+  private lyricsTrackId = '';
+  private lyricsLrc = '';
   private isMiniMode = false;
   private normalBounds: Electron.Rectangle | null = null;
   private isQuitting = false;
@@ -281,10 +221,17 @@ export class DesktopIntegration {
         supportedMimeTypes: ['audio/mpeg', 'audio/flac', 'audio/ogg', 'audio/mp4'],
       });
       this.mprisPlayer.on('playpause', () => this.mainWindow?.webContents.send('shortcut:media', 'playPause'));
-      this.mprisPlayer.on('play', () => this.mainWindow?.webContents.send('shortcut:media', 'playPause'));
-      this.mprisPlayer.on('pause', () => this.mainWindow?.webContents.send('shortcut:media', 'playPause'));
+      this.mprisPlayer.canSeek = true;
+      this.mprisPlayer.on('play', () => this.mainWindow?.webContents.send('shortcut:media', 'play'));
+      this.mprisPlayer.on('seek', (offset: number) => this.mainWindow?.webContents.send('shortcut:seek', { offset: offset / 1e6 }));
+      this.mprisPlayer.on('position', (event: { trackId: string; position: number }) => {
+        if (event.trackId === this.mprisPlayer.metadata?.['mpris:trackid']) this.mainWindow?.webContents.send('shortcut:seek', { position: event.position / 1e6 });
+      });
+      this.mprisPlayer.on('pause', () => this.mainWindow?.webContents.send('shortcut:media', 'pause'));
       this.mprisPlayer.on('next', () => this.mainWindow?.webContents.send('shortcut:media', 'next'));
       this.mprisPlayer.on('previous', () => this.mainWindow?.webContents.send('shortcut:media', 'prev'));
+      this.mprisPlayer.on('shuffle', (shuffle: boolean) => this.mainWindow?.webContents.send('desktop:playbackMode', { shuffle }));
+      this.mprisPlayer.on('loopStatus', (loopStatus: string) => this.mainWindow?.webContents.send('desktop:playbackMode', { repeat: loopStatus === 'Track' ? 'one' : loopStatus === 'Playlist' ? 'all' : 'none' }));
       this.mprisPlayer.on('raise', () => {
         this.mainWindow?.show();
         this.mainWindow?.focus();
@@ -401,7 +348,7 @@ export class DesktopIntegration {
     if (this.mprisPlayer) {
       try {
         this.mprisPlayer.playbackStatus = info.isPlaying ? 'Playing' : 'Paused';
-        this.mprisPlayer.getPosition = () => Math.round((info.position || 0) * 1e6);
+        this.mprisPlayer.getPosition = () => Math.round((this.lastPresence?.position || 0) * 1e6);
         this.mprisPlayer.metadata = {
           'mpris:trackid': this.mprisPlayer.objectPath(`track/${(info.id || '0').replace(/[^a-zA-Z0-9]/g, '')}`),
           'mpris:length': Math.round((info.duration || 0) * 1e6),
@@ -409,13 +356,36 @@ export class DesktopIntegration {
           'xesam:title': info.title || 'ArchiveTune',
           'xesam:album': info.album || 'ArchiveTune',
           'xesam:artist': [info.artist || 'Unknown'],
+          ...(info.id && info.id === this.lyricsTrackId && this.lyricsLrc ? { 'xesam:asText': this.lyricsLrc } : {}),
         };
       } catch { /* ignore */ }
     }
   }
 
   public setupIPC(): void {
+    ipcMain.on('desktop:updatePlaybackMode', (_e, mode: { shuffle: boolean; repeat: string }) => {
+      if (!this.mprisPlayer) return;
+      this.mprisPlayer.shuffle = Boolean(mode.shuffle);
+      this.mprisPlayer.loopStatus = mode.repeat === 'one' ? 'Track' : mode.repeat === 'all' ? 'Playlist' : 'None';
+    });
+    ipcMain.on('desktop:updateLyrics', (_e, trackId: string, lines: Array<{ time: number; text: string }>) => {
+      if (!trackId || !Array.isArray(lines)) return;
+      this.lyricsTrackId = trackId;
+      this.lyricsLrc = lines.filter(line => Number.isFinite(line.time) && typeof line.text === 'string').map(line => {
+        const hundredths = Math.max(0, Math.round(line.time * 100));
+        const minutes = Math.floor(hundredths / 6000);
+        const seconds = ((hundredths % 6000) / 100).toFixed(2).padStart(5, '0');
+        return `[${String(minutes).padStart(2, '0')}:${seconds}]${line.text.replace(/[\r\n]/g, ' ')}`;
+      }).join('\n');
+      if (this.lastPresence?.id === trackId) this.updatePresence(this.lastPresence);
+    });
     ipcMain.handle('window:toggleMiniMode', () => this.toggleMiniMode());
+    ipcMain.on('desktop:updatePosition', (_e, position: number, seeked: boolean) => {
+      if (this.lastPresence && Number.isFinite(position)) {
+        this.lastPresence.position = Math.max(0, position);
+        if (seeked) this.mprisPlayer?.seeked(Math.round(this.lastPresence.position * 1e6));
+      }
+    });
     ipcMain.handle('desktop:updatePresence', (_e, info: TrackPresenceInfo) => this.updatePresence(info));
     ipcMain.handle('desktop:listenBrainzNowPlaying', (_e, info: TrackPresenceInfo) => {
       submitListenBrainz('playing_now', info);
@@ -425,8 +395,8 @@ export class DesktopIntegration {
       submitListenBrainz('single', info);
       return true;
     });
-    ipcMain.handle('desktop:extractPalette', async (_e, imageUrl: string) => {
-      return extractPaletteFromArtwork(imageUrl);
+    ipcMain.handle('desktop:readArtworkThumbnail', async (_e, imageUrl: string) => {
+      return readArtworkThumbnail(imageUrl);
     });
     ipcMain.handle('desktop:toggleLocalApi', (_e, enabled: boolean) => {
       updateSettings({ localApiEnabled: enabled });

@@ -10,9 +10,16 @@ let requestId = 0;
 let cooldownUntil = 0;
 let lastError = '';
 let connected = false;
-const pending = new Map<number, { resolve: (value: any) => void; timer: ReturnType<typeof setTimeout> }>();
+let bridgeRevision = 0;
+type SpotifyCredentials = { token: string; user?: string };
+type BridgeResponse = { ok: boolean; code?: string; httpStatus?: number; url?: string; qualityLabel?: string };
+// The Java bridge reads and resolves one request at a time. Queue requests here
+// so a waiting request cannot time out and kill another active playback request.
+let nativeQueue: Promise<void> = Promise.resolve();
+const pending = new Map<number, { resolve: (value: BridgeResponse | null) => void; timer: ReturnType<typeof setTimeout> }>();
 const candidates = () => [path.join(__dirname,'../../assets/spotify-native'),path.join(process.resourcesPath || '', 'spotify-native')];
 function shutdown() {
+  ++bridgeRevision;
   const current = child; child = null; connected = false;
   current?.kill();
   for (const request of pending.values()) { clearTimeout(request.timer); request.resolve(null); }
@@ -30,28 +37,80 @@ function start(): ChildProcess | null {
       const result=JSON.parse(line);const request=pending.get(result.requestId);
       if(!request)return;
       pending.delete(result.requestId);clearTimeout(request.timer);
-      if(result.ok){connected=true;lastError='';}else{lastError=result.httpStatus ? `Spotify отклонил аудиозапрос (HTTP ${Number(result.httpStatus)})` : 'Не удалось открыть нативное аудио: проверьте соединение и доступ аккаунта';cooldownUntil=Date.now()+60000;}
-      request.resolve(result.ok?result:null);
+      if(result.ok){connected=true;lastError='';}else{const code = typeof result.code === 'string' && /^[A-Za-z][A-Za-z0-9]{0,80}$/.test(result.code) ? ` (${result.code})` : '';lastError=result.httpStatus ? `Spotify отклонил аудиозапрос (HTTP ${Number(result.httpStatus)})` : `Не удалось открыть нативное аудио${code}: проверьте соединение и доступ аккаунта`;if ([401, 429].includes(Number(result.httpStatus))) cooldownUntil = Date.now() + 10000;}
+      request.resolve(result);
     }catch{/* Ignore non-protocol diagnostic output. */}
   });
-  const ended=()=>{if(child===proc){lastError='Аудиодвижок Spotify недоступен: требуется Java 17+';cooldownUntil=Date.now()+60000;shutdown();}};
+  const ended=()=>{if(child===proc){lastError='Аудиодвижок Spotify недоступен: требуется Java 17+';cooldownUntil=Date.now()+10000;shutdown();}};
   proc.on('error',ended);proc.on('exit',ended);
   return proc;
 }
-export async function resolveNativeSpotify(id: string, credentials: {token: string; user?: string} | null): Promise<{url:string;qualityLabel:string;lossless:false;actualSource:'spotify'} | null> {
-  const clean=id.replace(/^spotify:(track:)?/,'');
-  if(!/^[a-zA-Z0-9]{22}$/.test(clean)||!credentials||Date.now()<cooldownUntil)return null;
-  const proc=start();if(!proc?.stdin)return null;
-  const number=++requestId;
-  const result=await new Promise<any>(resolve=>{
-    const timer=setTimeout(()=>{lastError='Spotify не ответил вовремя; используется резервный источник';cooldownUntil=Date.now()+60000;shutdown();},12000);
-    pending.set(number,{resolve,timer});
-    proc.stdin!.write(JSON.stringify({requestId:number,uri:`spotify:track:${clean}`,token:credentials.token,user:credentials.user||''})+'\n',error=>{if(error)shutdown();});
-  });
-  if(!result?.url)return null;
-  return {url:result.url,qualityLabel:result.qualityLabel,lossless:false,actualSource:'spotify'};
+export function spotifyTrackId(value?: string): string | undefined {
+  return value?.trim().match(
+    /^(?:spotify:(?:track:|\/\/(?:track\/)?)?|https:\/\/open\.spotify\.com\/(?:intl-[a-z-]+\/)?track\/)?([A-Za-z0-9]{22})(?:[?#][^\s]*)?$/,
+  )?.[1];
 }
-export function setupNativeSpotifyIPC(credentials: () => Promise<{token:string;user?:string}|null>): void {
+
+function requestNative(
+  payload: { uri: string; reload: boolean } | { warmup: true },
+  credentials: SpotifyCredentials,
+  options: { manual?: boolean; signal?: AbortSignal } = {},
+): Promise<BridgeResponse | null> {
+  const revision = bridgeRevision;
+  const execute = async () => {
+    if (revision !== bridgeRevision || options.signal?.aborted) return null;
+    if (!options.manual && Date.now() < cooldownUntil) return null;
+    const proc = start();
+    if (!proc?.stdin) return null;
+    const number = ++requestId;
+    return new Promise<BridgeResponse | null>((resolve) => {
+      const timer = setTimeout(() => {
+        lastError = 'Spotify не ответил вовремя';
+        cooldownUntil = Date.now() + 10000;
+        shutdown();
+      }, 12000);
+      pending.set(number, { resolve, timer });
+      proc.stdin!.write(JSON.stringify({ ...payload, requestId: number, token: credentials.token, user: credentials.user || '' }) + '\n', (error) => {
+        if (error && child === proc) shutdown();
+      });
+    });
+  };
+  const queued = nativeQueue.then(execute, execute);
+  nativeQueue = queued.then(() => {}, () => {});
+  return queued;
+}
+
+export async function resolveNativeSpotify(
+  id: string,
+  credentials: SpotifyCredentials | null,
+  manual = false,
+  signal?: AbortSignal,
+): Promise<{ url: string; qualityLabel: string; lossless: false; actualSource: 'spotify' } | null> {
+  const clean = spotifyTrackId(id);
+  if (!clean || !credentials) return null;
+  const payload = { uri: `spotify:track:${clean}`, reload: manual };
+  const options = { manual, signal };
+  const revision = bridgeRevision;
+  let result = await requestNative(payload, credentials, options);
+  if (revision === bridgeRevision && result?.code === 'IOException' && !result.httpStatus && !signal?.aborted) {
+    result = await requestNative(payload, credentials, options);
+  }
+  if (!result?.ok || !result.url) return null;
+  return { url: result.url, qualityLabel: result.qualityLabel || 'Spotify native Vorbis', lossless: false, actualSource: 'spotify' };
+}
+
+export function setupNativeSpotifyIPC(credentials: () => Promise<SpotifyCredentials | null>): void {
+  if (getDb().settings.nativeSpotifyEnabled && getDb().settings.enabledSources.spotify !== false) {
+    const revision = bridgeRevision;
+    start();
+    void credentials().then(async auth => {
+      if (!auth || revision !== bridgeRevision || !getDb().settings.nativeSpotifyEnabled) return;
+      const response = await requestNative({ warmup: true }, auth);
+      if (revision === bridgeRevision && response?.code === 'IOException' && !response.httpStatus) {
+        await requestNative({ warmup: true }, auth);
+      }
+    }).catch(() => {});
+  }
   ipcMain.handle('spotify:nativeStatus',()=>({enabled:getDb().settings.nativeSpotifyEnabled ?? false,connected,lastError,bundled:candidates().some(p=>fs.existsSync(path.join(p,'archivetune-spotify.jar')))}));
   ipcMain.handle('spotify:nativeConnect', async () => {
     cooldownUntil = 0;

@@ -1,5 +1,7 @@
-import React, { useEffect, useRef } from 'react';
+import React, { memo, useEffect, useRef } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { usePlayerStore, useUIStore } from '../store';
+import { useInterfaceMotionReduced } from '../lib/useInterfaceMotion';
 
 interface AudioVisualizerProps {
   className?: string;
@@ -7,16 +9,18 @@ interface AudioVisualizerProps {
   styleOverride?: 'bars' | 'wave' | 'circular';
 }
 
-export default function AudioVisualizer({
+export default memo(function AudioVisualizer({
   className = '',
   height = 56,
   styleOverride,
 }: AudioVisualizerProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
-  const position = usePlayerStore((s) => s.position);
+  const animate = !useInterfaceMotionReduced() && isPlaying;
   const { visualizerEnabled, visualizerStyle, seedColor, activeArtColor, dynamicColorFromArt } =
-    useUIStore();
+    useUIStore(useShallow(({ visualizerEnabled, visualizerStyle, seedColor, activeArtColor, dynamicColorFromArt }) => ({
+      visualizerEnabled, visualizerStyle, seedColor, activeArtColor, dynamicColorFromArt,
+    })));
 
   const activeStyle = styleOverride ?? visualizerStyle;
   const accent = (dynamicColorFromArt && activeArtColor) || seedColor || '#cbb9f5';
@@ -31,41 +35,46 @@ export default function AudioVisualizer({
     let rafId = 0;
     const bins = 40;
     const levels = new Float32Array(bins).fill(0.12);
+    const barGradient = ctx.createLinearGradient(0, canvas.height * 0.3, 0, canvas.height);
+    barGradient.addColorStop(0, accent);
+    barGradient.addColorStop(1, `${accent}33`);
     let phase = 0;
+    let lastFrame = 0;
 
-    const render = () => {
+    const render = (now: number) => {
+      if (animate) rafId = requestAnimationFrame(render);
+      const elapsed = lastFrame ? now - lastFrame : 1000 / 30;
+      if (elapsed < 1000 / 30 - 1) return;
+      lastFrame = now;
       const w = canvas.width;
       const h = canvas.height;
       ctx.clearRect(0, 0, w, h);
 
-      phase += isPlaying ? 0.08 : 0.015;
+      phase += Math.min(elapsed, 100) * 0.0048;
 
       for (let i = 0; i < bins; i++) {
         const beatWave =
           Math.sin(phase * 1.9 + i * 0.37) * 0.35 +
           Math.cos(phase * 3.1 - i * 0.21) * 0.28 +
-          Math.sin(phase * 0.7 + (position || 0) + i * 0.5) * 0.22;
-        const target = isPlaying
+          Math.sin(phase * 0.7 + i * 0.5) * 0.22;
+        const target = animate
           ? Math.max(0.1, Math.min(0.95, 0.42 + beatWave * (1 - Math.abs(i - bins / 2) / bins)))
           : 0.08 + 0.04 * Math.sin(phase + i * 0.25);
-        levels[i] += (target - levels[i]) * 0.22;
+        levels[i] = animate ? levels[i] + (target - levels[i]) * 0.38 : target;
       }
 
       if (activeStyle === 'bars') {
         const gap = 3;
         const barW = Math.max(2, (w - gap * (bins - 1)) / bins);
+        ctx.fillStyle = barGradient;
+        ctx.beginPath();
         for (let i = 0; i < bins; i++) {
           const barH = Math.max(3, levels[i] * (h - 6));
           const x = i * (barW + gap);
           const y = h - barH;
-          const grad = ctx.createLinearGradient(0, y, 0, h);
-          grad.addColorStop(0, accent);
-          grad.addColorStop(1, `${accent}33`);
-          ctx.fillStyle = grad;
-          ctx.beginPath();
           ctx.roundRect(x, y, barW, barH, Math.min(4, barW / 2));
-          ctx.fill();
         }
+        ctx.fill();
       } else if (activeStyle === 'wave') {
         ctx.beginPath();
         ctx.lineWidth = 2.5;
@@ -93,12 +102,11 @@ export default function AudioVisualizer({
         }
       }
 
-      rafId = requestAnimationFrame(render);
     };
 
     rafId = requestAnimationFrame(render);
     return () => cancelAnimationFrame(rafId);
-  }, [visualizerEnabled, activeStyle, isPlaying, accent, position]);
+  }, [visualizerEnabled, activeStyle, animate, accent, height]);
 
   if (!visualizerEnabled) return null;
 
@@ -111,4 +119,4 @@ export default function AudioVisualizer({
       style={{ height }}
     />
   );
-}
+});

@@ -38,3 +38,7 @@ npx electron dist/main/index.js
 # Build Linux AppImage / directory bundle
 npm run dist:linux
 ```
+
+The audio-analysis build uses Rust/WASM when the Rust toolchain (1.85+) has the
+`wasm32-unknown-unknown` target installed (`rustup target add wasm32-unknown-unknown`).
+Otherwise AutoMix and acoustic quality analysis use the TypeScript worker.

@@ -16,11 +16,24 @@ import java.util.concurrent.Executors;
 
 /** Desktop adapter. Credentials arrive on stdin, never command-line arguments or HTTP URLs. */
 public final class ArchiveTuneSpotify {
+  private static final class StreamEntry {
+    final PlayableContentFeeder.LoadedStream loaded;
+    final int audioOffset;
+    final String trackUri;
+    final long openedAt;
+    StreamEntry(PlayableContentFeeder.LoadedStream loaded, int audioOffset, String trackUri) {
+      this.loaded = loaded;
+      this.audioOffset = audioOffset;
+      this.trackUri = trackUri;
+      this.openedAt = System.nanoTime();
+    }
+  }
+
   private Session session;
   private String account = "";
   private final HttpServer server;
   private final String capability = UUID.randomUUID().toString();
-  private final Map<String, PlayableContentFeeder.LoadedStream> streams = Collections.synchronizedMap(new LinkedHashMap<>());
+  private final Map<String, StreamEntry> streams = Collections.synchronizedMap(new LinkedHashMap<>());
   ArchiveTuneSpotify() throws IOException {
     server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
     server.createContext("/" + capability + "/", this::serve);
@@ -29,10 +42,13 @@ public final class ArchiveTuneSpotify {
   }
   private void serve(HttpExchange x) throws IOException {
     String id = x.getRequestURI().getPath().replace("/" + capability + "/", "");
-    var loaded = streams.get(id);
-    if (loaded == null || !(x.getRequestMethod().equals("GET") || x.getRequestMethod().equals("HEAD"))) { x.sendResponseHeaders(404,-1); x.close(); return; }
-    var stream = loaded.in.stream();
-    long size = stream.size(), start = 0, end = size-1;
+    var entry = streams.get(id);
+    if (entry == null || !(x.getRequestMethod().equals("GET") || x.getRequestMethod().equals("HEAD"))) { x.sendResponseHeaders(404,-1); x.close(); return; }
+    var stream = entry.loaded.in.stream();
+    final int audioOffset = entry.audioOffset;
+    long size = stream.size() - audioOffset;
+    if (size <= 0) { x.sendResponseHeaders(500, -1); x.close(); return; }
+    long start = 0, end = size - 1;
     String range = x.getRequestHeaders().getFirst("Range");
     boolean partial = range != null;
     if (partial) {
@@ -55,7 +71,7 @@ public final class ArchiveTuneSpotify {
       for (long position=start;position<=end;) {
         int read;
         synchronized(stream) {
-          stream.seek((int)position);
+          stream.seek((int)(position + audioOffset));
           read=stream.read(buffer,0,(int)Math.min(buffer.length,end-position+1));
         }
         if(read<0)break;
@@ -64,12 +80,14 @@ public final class ArchiveTuneSpotify {
     } catch(Exception ignored) { /* Receiver disconnected or skipped the track. */ }
     finally { x.close(); }
   }
-  private JsonObject resolve(JsonObject request) throws Exception {
-    String uri=request.get("uri").getAsString();
-    if(!uri.matches("spotify:track:[A-Za-z0-9]{22}"))throw new IllegalArgumentException();
+  private void ensureSession(JsonObject request) throws Exception {
     String user=request.has("user")?request.get("user").getAsString():"";
     if(session==null || !session.isValid() || !account.equals(user)) {
-      if(session!=null)session.close();
+      if (session != null) session.close();
+      synchronized (streams) {
+        for (var entry : streams.values()) entry.loaded.in.stream().close();
+        streams.clear();
+      }
       var conf=new Session.Configuration.Builder().setStoreCredentials(false).setCacheEnabled(false).setConnectionTimeout(8).build();
       var credentials=Authentication.LoginCredentials.newBuilder()
         .setTyp(Authentication.AuthenticationType.AUTHENTICATION_SPOTIFY_TOKEN)
@@ -79,16 +97,70 @@ public final class ArchiveTuneSpotify {
       account=user;
     }
     session.tokens().setDesktopAccessToken(request.get("token").getAsString());
+  }
+
+  private JsonObject streamResponse(String id) {
+    JsonObject result = new JsonObject();
+    result.addProperty("ok", true);
+    result.addProperty("url", "http://127.0.0.1:" + server.getAddress().getPort() + "/" + capability + "/" + id);
+    result.addProperty("qualityLabel", "Spotify native Vorbis");
+    return result;
+  }
+
+  private JsonObject resolve(JsonObject request) throws Exception {
+    if (request.has("warmup") && request.get("warmup").getAsBoolean()) {
+      ensureSession(request);
+      JsonObject result = new JsonObject();
+      result.addProperty("ok", true);
+      return result;
+    }
+    String uri = request.get("uri").getAsString();
+    if (!uri.matches("spotify:track:[A-Za-z0-9]{22}")) throw new IllegalArgumentException();
+    ensureSession(request);
+    if (!request.has("reload") || !request.get("reload").getAsBoolean()) {
+      synchronized (streams) {
+        for (var entry : streams.entrySet()) {
+          var cached = entry.getValue();
+          if (cached.trackUri.equals(uri) && System.nanoTime() - cached.openedAt < 300_000_000_000L) {
+            return streamResponse(entry.getKey());
+          }
+        }
+      }
+    }
     boolean premium="premium".equals(session.getUserAttribute("type", ""));
     var loaded=session.contentFeeder().load(PlayableId.fromUri(uri),new VorbisOnlyAudioQuality(premium?AudioQuality.VERY_HIGH:AudioQuality.HIGH),false,null);
+    var stream = loaded.in.stream();
+    int audioOffset = 167;
+    synchronized(stream) {
+      byte[] probe = new byte[512];
+      stream.seek(0);
+      int read = 0;
+      while (read < probe.length) {
+        int count = stream.read(probe, read, probe.length - read);
+        if (count <= 0) break;
+        read += count;
+      }
+      // A Vorbis identification packet starts at the page body, after the Ogg lacing table.
+      for (int i = 0; i <= read - 35; i++) {
+        if (probe[i] != 'O' || probe[i + 1] != 'g' || probe[i + 2] != 'g' ||
+            probe[i + 3] != 'S' || probe[i + 4] != 0 || probe[i + 5] != 2) continue;
+        int segments = Byte.toUnsignedInt(probe[i + 26]);
+        int body = i + 27 + segments;
+        if (segments == 0 || body + 7 > read || Byte.toUnsignedInt(probe[i + 27]) < 7) continue;
+        if (probe[body] == 1 && probe[body + 1] == 'v' && probe[body + 2] == 'o' &&
+            probe[body + 3] == 'r' && probe[body + 4] == 'b' &&
+            probe[body + 5] == 'i' && probe[body + 6] == 's') {
+          audioOffset = i;
+          break;
+        }
+      }
+    }
     String id=UUID.randomUUID().toString();
     synchronized(streams) {
-      streams.put(id,loaded);
-      if(streams.size()>8) { String old=streams.keySet().iterator().next(); streams.remove(old).in.stream().close(); }
+      streams.put(id, new StreamEntry(loaded, audioOffset, uri));
+      if(streams.size()>8) { String old=streams.keySet().iterator().next(); streams.remove(old).loaded.in.stream().close(); }
     }
-    JsonObject result=new JsonObject();result.addProperty("ok",true);
-    result.addProperty("url","http://127.0.0.1:"+server.getAddress().getPort()+"/"+capability+"/"+id);
-    result.addProperty("qualityLabel","Spotify native Vorbis");return result;
+    return streamResponse(id);
   }
   public static void main(String[] args) throws Exception {
     System.setProperty("org.slf4j.simpleLogger.defaultLogLevel","off");

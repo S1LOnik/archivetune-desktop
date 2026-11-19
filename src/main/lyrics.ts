@@ -14,6 +14,8 @@ import { ipcMain } from 'electron';
 import https from 'https';
 import http from 'http';
 import { getDb } from './db';
+import { getValidSpotifyTokenOrNull } from './spotify';
+import { spotifyTrackId } from './spotifyNative';
 
 export interface LyricWord {
   text: string;
@@ -38,12 +40,15 @@ export interface LyricsResult {
   hasWordSync: boolean;
 }
 
-const lyricsCache = new Map<string, LyricsResult>();
-function cacheLyrics(key: string, res: LyricsResult): void {
+const lyricsCache = new Map<string, { result: LyricsResult; expiresAt: number }>();
+const lyricsInFlight = new Map<string, Promise<LyricsResult>>();
+function cacheLyrics(key: string, res: LyricsResult, spotifyId?: string): void {
   if (lyricsCache.size >= 100) {
     lyricsCache.delete(lyricsCache.keys().next().value!);
   }
-  lyricsCache.set(key, res);
+  // Recheck incomplete results so a temporary Spotify failure or a new login can recover.
+  const ttl = !res.synced.length || (spotifyId && res.source !== 'Spotify Synced') ? 60_000 : 30 * 60_000;
+  lyricsCache.set(key, { result: res, expiresAt: Date.now() + ttl });
 }
 
 function fetchUrl(urlStr: string, timeoutMs = 8000): Promise<string> {
@@ -96,7 +101,7 @@ function cleanTitle(rawTitle: string): string {
     .replace(/\|\s*.*$/g, '')
     .trim();
 
-  const parts = t.split(/\s*[-–—]\s*/);
+  const parts = t.split(/\s+[-–—]\s+/);
   if (parts.length > 1) {
     t = parts[parts.length - 1].trim();
   }
@@ -113,6 +118,53 @@ function cleanArtist(rawArtist: string): string {
       .split(/,|&|\bfeat\.?\b|\bft\.?\b/i)[0]
       .trim() || rawArtist.trim()
   );
+}
+
+async function fetchSpotifyLyrics(id: string, rejectedToken?: string): Promise<LyricsResult | null> {
+  try {
+    const token = await getValidSpotifyTokenOrNull(rejectedToken);
+    if (!token || token === rejectedToken) return null;
+    const data = await new Promise<string>((resolve, reject) => {
+      const req = https.get(`https://spclient.wg.spotify.com/color-lyrics/v2/track/${id}?format=json&vocalRemoval=false&market=from_token`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
+          'App-Platform': 'WebPlayer',
+          Origin: 'https://open.spotify.com',
+          Referer: 'https://open.spotify.com/',
+          Accept: 'application/json',
+        },
+      }, (res) => {
+        if (res.statusCode === 401 && !rejectedToken) {
+          res.resume();
+          resolve('');
+          return;
+        }
+        if (res.statusCode !== 200) { res.resume(); reject(new Error(`Spotify lyrics HTTP ${res.statusCode}`)); return; }
+        let body = '';
+        res.on('data', (chunk) => { body += chunk; });
+        res.on('end', () => resolve(body));
+        res.on('error', reject);
+      });
+      req.setTimeout(5000, () => req.destroy(new Error('Spotify lyrics timeout')));
+      req.on('error', reject);
+    });
+    if (!data && !rejectedToken) return fetchSpotifyLyrics(id, token);
+    const lyrics = JSON.parse(data)?.lyrics;
+    if (!Array.isArray(lyrics?.lines)) return null;
+    const lines = lyrics.lines.filter((line: any) => typeof line?.words === 'string' && line.words.trim());
+    if (!lines.length) return null;
+    const plain = lines.map((line: any) => line.words).join('\n');
+    const timed = lyrics.syncType === 'LINE_SYNCED' || lyrics.syncType === 'WORD_SYNCED';
+    const synced: LyricLine[] = timed ? lines.flatMap((line: any) => {
+      const raw = line.startTimeMs;
+      const ms = typeof raw === 'number' || (typeof raw === 'string' && raw.trim()) ? Number(raw) : NaN;
+      return Number.isFinite(ms) && ms >= 0 ? [{ time: ms / 1000, text: line.words }] : [];
+    }).sort((a: LyricLine, b: LyricLine) => a.time - b.time) : [];
+    return { synced, plain, source: synced.length ? 'Spotify Synced' : 'Spotify Plain', hasWordSync: false };
+  } catch {
+    return null;
+  }
 }
 
 function parseTimeTagToSeconds(tag: string): number {
@@ -716,48 +768,63 @@ async function enrichLyricsWithRomanizationAndTranslation(
 export function setupLyricsIPC(): void {
   ipcMain.handle(
     'lyrics:get',
-    async (_e, title: string, artist: string, duration: number, videoId?: string) => {
+    async (_e, title: string, artist: string, duration: number, trackId?: string, spotifyRef?: string) => {
+      const spotifyId = spotifyTrackId(spotifyRef) || (/^(spotify:|https:\/\/open\.spotify\.com\/)/.test(trackId || '') ? spotifyTrackId(trackId) : undefined);
+      const videoId = trackId?.replace(/^youtube:/, '');
       const settings = getDb().settings;
-      const cacheKey = `${title}:${artist}:${duration}:${settings.lyricsTranslate}:${settings.lyricsRomanize}`;
+      const cacheKey = `${spotifyId || ''}:${trackId || ''}:${title}:${artist}:${duration}:${settings.lyricsTranslate}:${settings.lyricsRomanize}:${settings.lyricsTranslateLang}`;
       const cached = lyricsCache.get(cacheKey);
-      if (cached) return cached;
+      if (cached && cached.expiresAt > Date.now()) return cached.result;
 
-      try {
-        // Waterfall: YouLyPlus (Word-Sync) -> BetterLyrics (TTML Word-Sync) -> Paxsenix (Word-Sync) -> LRCLib -> SimpMusic -> NetEase
-        const providers: Array<() => Promise<LyricsResult | null>> = [
-          () => fetchYouLyPlus(title, artist, duration),
-          () => fetchBetterLyrics(title, artist, duration),
-          () => fetchPaxsenix(title, artist),
-          () => fetchLRCLib(title, artist, duration),
-          ...(videoId ? [() => fetchSimpMusic(videoId, duration)] : []),
-          () => fetchNetEase(title, artist),
-        ];
+      const inFlight = lyricsInFlight.get(cacheKey);
+      if (inFlight) return inFlight;
 
-        let fallbackSynced: LyricsResult | null = null;
-        for (const runProvider of providers) {
-          const res = await runProvider();
-          if (res && res.synced.length > 0) {
-            if (res.hasWordSync) {
-              const enriched = await enrichLyricsWithRomanizationAndTranslation(res);
-              cacheLyrics(cacheKey, enriched);
-              return enriched;
-            }
-            if (!fallbackSynced) fallbackSynced = res;
-          } else if (res && res.plain && !fallbackSynced) {
-            fallbackSynced = res;
+      const lookup = (async (): Promise<LyricsResult> => {
+        try {
+          const spotify = spotifyId ? await fetchSpotifyLyrics(spotifyId) : null;
+          if (spotify?.synced.length) {
+            const enriched = await enrichLyricsWithRomanizationAndTranslation(spotify);
+            cacheLyrics(cacheKey, enriched, spotifyId);
+            return enriched;
           }
+          // Waterfall: YouLyPlus (Word-Sync) -> BetterLyrics (TTML Word-Sync) -> Paxsenix (Word-Sync) -> LRCLib -> SimpMusic -> NetEase
+          const providers: Array<() => Promise<LyricsResult | null>> = [
+            () => fetchYouLyPlus(title, artist, duration),
+            () => fetchBetterLyrics(title, artist, duration),
+            () => fetchPaxsenix(title, artist),
+            () => fetchLRCLib(title, artist, duration),
+            ...(videoId && /^[\w-]{11}$/.test(videoId) ? [() => fetchSimpMusic(videoId, duration)] : []),
+            () => fetchNetEase(title, artist),
+          ];
+
+          let fallbackSynced: LyricsResult | null = spotify;
+          for (const runProvider of providers) {
+            const res = await runProvider();
+            if (res && res.synced.length > 0) {
+              if (res.hasWordSync) {
+                const enriched = await enrichLyricsWithRomanizationAndTranslation(res);
+                cacheLyrics(cacheKey, enriched, spotifyId);
+                return enriched;
+              }
+              if (!fallbackSynced || fallbackSynced.synced.length === 0) fallbackSynced = res;
+            } else if (res && res.plain && !fallbackSynced) {
+              fallbackSynced = res;
+            }
+          }
+
+          if (fallbackSynced) {
+            const enriched = await enrichLyricsWithRomanizationAndTranslation(fallbackSynced);
+            cacheLyrics(cacheKey, enriched, spotifyId);
+            return enriched;
+          }
+        } catch (err) {
+          console.error('lyrics:get waterfall error:', err);
         }
 
-        if (fallbackSynced) {
-          const enriched = await enrichLyricsWithRomanizationAndTranslation(fallbackSynced);
-          cacheLyrics(cacheKey, enriched);
-          return enriched;
-        }
-      } catch (err) {
-        console.error('lyrics:get waterfall error:', err);
-      }
-
-      return { synced: [], plain: '', source: 'none', hasWordSync: false };
+        return { synced: [], plain: '', source: 'none', hasWordSync: false };
+      })().finally(() => lyricsInFlight.delete(cacheKey));
+      lyricsInFlight.set(cacheKey, lookup);
+      return lookup;
     }
   );
 

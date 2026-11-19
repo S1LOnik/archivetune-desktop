@@ -14,7 +14,7 @@ import { app, dialog, ipcMain } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { execFile, spawn } from 'child_process';
+import { spawn } from 'child_process';
 
 export type PlayerStyleId =
   | 'flamingo'
@@ -192,6 +192,9 @@ export interface AppSettings {
   prebufferNextTrack: boolean;
   compactTrackRows: boolean;
   ambientBackgroundBlur: boolean;
+  reduceInterfaceMotion: boolean;
+  interfaceMotionPreset: 'balanced' | 'snappy' | 'bouncy' | 'smooth';
+  glassEffect: 'off' | 'soft' | 'full';
   replayGainMode: 'off' | 'track' | 'album';
   targetLoudnessLufs: number;
   keyboardShortcutsEnabled: boolean;
@@ -352,6 +355,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   prebufferNextTrack: true,
   compactTrackRows: false,
   ambientBackgroundBlur: true,
+  reduceInterfaceMotion: false,
+  interfaceMotionPreset: 'balanced',
+  glassEffect: 'soft',
   replayGainMode: 'track',
   targetLoudnessLufs: -14,
   keyboardShortcutsEnabled: true,
@@ -397,6 +403,7 @@ const DEFAULT_DB: DatabaseSchema = {
 let dbCache: DatabaseSchema | null = null;
 let saveDebounceTimer: NodeJS.Timeout | null = null;
 let sqliteSyncedOnce = false;
+let sqliteSavePending = false;
 
 function getDataDir(): string {
   try {
@@ -516,7 +523,7 @@ function syncToSqlite(db: DatabaseSchema): void {
   }
 }
 
-export function saveDbImmediate(): void {
+function persistDb(updateSqlite: boolean): void {
   if (!dbCache) return;
   try {
     const dir = getDataDir();
@@ -525,17 +532,29 @@ export function saveDbImmediate(): void {
     const tmp = `${target}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(dbCache, null, 2), 'utf-8');
     fs.renameSync(tmp, target);
-    syncToSqlite(dbCache);
+    if (updateSqlite || (!sqliteSyncedOnce && !fs.existsSync(getSqlitePath()))) {
+      syncToSqlite(dbCache);
+    }
   } catch (err) {
     console.error('[DB] Failed to save DB:', err);
   }
 }
 
-export function scheduleSaveDb(delayMs = 300): void {
+export function saveDbImmediate(): void {
+  if (saveDebounceTimer) clearTimeout(saveDebounceTimer);
+  saveDebounceTimer = null;
+  sqliteSavePending = false;
+  persistDb(true);
+}
+
+function scheduleSaveDb(delayMs: number, updateSqlite = true): void {
+  sqliteSavePending ||= updateSqlite;
   if (saveDebounceTimer) clearTimeout(saveDebounceTimer);
   saveDebounceTimer = setTimeout(() => {
     saveDebounceTimer = null;
-    saveDbImmediate();
+    const shouldUpdateSqlite = sqliteSavePending;
+    sqliteSavePending = false;
+    persistDb(shouldUpdateSqlite);
   }, delayMs);
 }
 
@@ -622,7 +641,7 @@ export function recordTrackPlayStats(track: PersistedTrack, secondsListened?: nu
     lastPlayedAt: Date.now(),
   };
 
-  scheduleSaveDb(500);
+  scheduleSaveDb(500, false);
   return db.stats;
 }
 
@@ -657,14 +676,14 @@ export function setupDatabaseIPC(): void {
       queueIndex: queueState.queueIndex,
       position: queueState.position,
     };
-    scheduleSaveDb(800);
+    scheduleSaveDb(800, false);
     return true;
   });
 
   ipcMain.handle('db:saveHistory', (_e, history: PersistedTrack[]) => {
     const db = getDb();
     db.history = history.slice(0, 200);
-    scheduleSaveDb(500);
+    scheduleSaveDb(500, false);
     return true;
   });
 

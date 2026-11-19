@@ -1,35 +1,35 @@
+import { useShallow } from 'zustand/react/shallow';
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import {
   Search,
   Loader2,
   Disc3,
-  Sparkles,
-  Radio,
-  Music,
   User,
   ListMusic,
   Album as AlbumIcon,
   X,
   ArrowUpRight,
-  SlidersHorizontal,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { trackCount } from '../lib/interfaceText';
 import TrackRow from '../components/TrackRow';
 import { Track, useSearchStore, usePlayerStore, AudioSourceId } from '../store';
 
 type SearchSourceTab = 'all' | 'tidal' | 'qobuz' | 'youtube' | 'soundcloud' | 'deezer' | 'jiosaavn' | 'spotify';
 type EntityFilter = 'all' | 'songs' | 'albums' | 'artists' | 'playlists';
 
-const SOURCE_TABS: Array<{ id: SearchSourceTab; label: string; badge?: string }> = [
-  { id: 'all', label: 'Universal Matrix', badge: '8 источников' },
-  { id: 'tidal', label: 'Tidal', badge: 'Lossless FLAC' },
-  { id: 'qobuz', label: 'Qobuz', badge: 'Hi-Res 24-bit' },
-  { id: 'youtube', label: 'YouTube Music', badge: 'InnerTube' },
-  { id: 'soundcloud', label: 'SoundCloud', badge: 'API v2' },
-  { id: 'deezer', label: 'Deezer', badge: 'Catalog' },
-  { id: 'jiosaavn', label: 'JioSaavn', badge: '320kbps' },
-  { id: 'spotify', label: 'Spotify', badge: 'Web API' },
+const SOURCE_TABS: Array<{ id: SearchSourceTab; label: string }> = [
+  { id: 'all', label: 'Все источники' },
+  { id: 'tidal', label: 'Tidal' },
+  { id: 'qobuz', label: 'Qobuz' },
+  { id: 'youtube', label: 'YouTube Music' },
+  { id: 'soundcloud', label: 'SoundCloud' },
+  { id: 'deezer', label: 'Deezer' },
+  { id: 'jiosaavn', label: 'JioSaavn' },
+  { id: 'spotify', label: 'Spotify' },
 ];
+
+let searchRequest = 0;
 
 const AI_SPAM_PATTERNS = /\b(ai generated|suno ai|udio ai|10 hours|8d audio|slowed \+ reverb loop)\b/i;
 
@@ -37,6 +37,8 @@ export default function SearchPage() {
   const navigate = useNavigate();
   const {
     query,
+    submittedQuery,
+    searchError,
     results,
     albums,
     artists,
@@ -45,16 +47,24 @@ export default function SearchPage() {
     suggestions,
     searching,
     setQuery,
-    setResults,
+    setSubmittedQuery,
+    setSearchError,
     setSearchAllResults,
     setSourceFilter,
     setSuggestions,
     setSearching,
   } = useSearchStore();
-  const { blockedArtists, aiContentFilter } = usePlayerStore();
+  const { blockedArtists, aiContentFilter } = usePlayerStore(useShallow((state) => ({
+    blockedArtists: state.blockedArtists,
+    aiContentFilter: state.aiContentFilter,
+  })));
 
+  const [searchHistory, setSearchHistory] = useState<string[]>(() => {
+    try { const saved = JSON.parse(localStorage.getItem('archivetune.searchHistory') || '[]'); return Array.isArray(saved) ? saved.filter((item): item is string => typeof item === 'string').slice(0, 20) : []; } catch { return []; }
+  });
   const [entityFilter, setEntityFilter] = useState<EntityFilter>('all');
-  const [searched, setSearched] = useState(results.length > 0 || albums.length > 0);
+  const searched = Boolean(submittedQuery);
+  const suggestionRequest = useRef(0);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputWrapperRef = useRef<HTMLDivElement>(null);
@@ -66,23 +76,28 @@ export default function SearchPage() {
       }
     };
     document.addEventListener('mousedown', handleOutside);
-    return () => document.removeEventListener('mousedown', handleOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      suggestionRequest.current++;
+    };
   }, []);
 
   const handleQueryChange = (val: string) => {
     setQuery(val);
+    setShowSuggestions(false);
+    setSuggestions([]);
+    const request = ++suggestionRequest.current;
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (!val.trim() || val.trim().length < 2) {
-      setSuggestions([]);
-      return;
-    }
+    if (val.trim().length < 2) return;
     debounceRef.current = setTimeout(async () => {
       try {
         const list = (await window.electronAPI?.ytmusic?.getSuggestions(val.trim())) ?? [];
+        if (request !== suggestionRequest.current) return;
         setSuggestions(list.slice(0, 7));
         setShowSuggestions(list.length > 0);
       } catch {
-        setSuggestions([]);
+        if (request === suggestionRequest.current) setSuggestions([]);
       }
     }, 240);
   };
@@ -91,21 +106,35 @@ export default function SearchPage() {
     async (rawQ: string, src: SearchSourceTab) => {
       const q = rawQ.trim();
       if (!q) return;
+      setSearchHistory((previous) => {
+        const next = [q, ...previous.filter((item) => item.toLocaleLowerCase() !== q.toLocaleLowerCase())].slice(0, 20);
+        try { localStorage.setItem('archivetune.searchHistory', JSON.stringify(next)); } catch { /* storage unavailable */ }
+        return next;
+      });
       setSearching(true);
-      setSearched(true);
+      setSubmittedQuery(q);
+      setSearchError(false);
+      setEntityFilter('all');
+      const request = ++searchRequest;
+      suggestionRequest.current++;
+      setSuggestions([]);
+      const publish = (data: Parameters<typeof setSearchAllResults>[0]) => {
+        if (request === searchRequest) setSearchAllResults(data);
+      };
       setShowSuggestions(false);
       try {
         if (src === 'spotify') {
           const spRes = (await window.electronAPI?.spotify?.search(q, 30)) ?? [];
-          setSearchAllResults({ songs: spRes, albums: [], artists: [], playlists: [] });
+          publish({ songs: spRes, albums: [], artists: [], playlists: [] });
         } else if (src === 'youtube') {
           const ytmAll = await window.electronAPI?.ytmusic?.searchAll(q);
-          setSearchAllResults(ytmAll || { songs: [], albums: [], artists: [], playlists: [] });
+          publish(ytmAll || { songs: [], albums: [], artists: [], playlists: [] });
         } else if (src === 'all') {
           const [multiRes, ytmAll] = await Promise.allSettled([
             window.electronAPI?.providers?.searchMulti(q, 'all'),
             window.electronAPI?.ytmusic?.searchAll(q),
           ]);
+          if (multiRes.status === 'rejected' && ytmAll.status === 'rejected') throw ytmAll.reason;
           const tracks =
             multiRes.status === 'fulfilled' && Array.isArray(multiRes.value)
               ? multiRes.value
@@ -113,24 +142,27 @@ export default function SearchPage() {
                 ? ytmAll.value?.songs || []
                 : [];
           const ytmData = ytmAll.status === 'fulfilled' ? ytmAll.value : null;
-          setSearchAllResults({
-            songs: tracks,
+          publish({
+            songs: [...(ytmData?.songs || []), ...tracks.filter((track) => !(ytmData?.songs || []).some((song) => song.id === track.id && song.source === track.source))],
             albums: ytmData?.albums || [],
             artists: ytmData?.artists || [],
             playlists: ytmData?.playlists || [],
           });
         } else {
           const multiRes = (await window.electronAPI?.providers?.searchMulti(q, src)) ?? [];
-          setSearchAllResults({ songs: multiRes, albums: [], artists: [], playlists: [] });
+          publish({ songs: multiRes, albums: [], artists: [], playlists: [] });
         }
       } catch (err) {
         console.error('Search error', err);
-        setResults([]);
+        if (request === searchRequest) {
+          publish({ songs: [], albums: [], artists: [], playlists: [] });
+          setSearchError(true);
+        }
       } finally {
-        setSearching(false);
+        if (request === searchRequest) setSearching(false);
       }
     },
-    [setResults, setSearchAllResults, setSearching]
+    [setSearchAllResults, setSearchError, setSearching, setSubmittedQuery, setSuggestions]
   );
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -149,27 +181,15 @@ export default function SearchPage() {
   const activeSourceTab = (sourceFilter || 'all') as SearchSourceTab;
 
   return (
-    <div className="p-6 space-y-6 pb-28">
-      <div className="flex items-start justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-black text-on-surface tracking-tight">
-            Мульти-Поиск &amp; Universal Matrix
-          </h1>
-          <p className="text-xs text-on-surface-variant mt-0.5">
-            Живые подсказки YTM, альбомы, артисты, плейлисты и прямой поиск по Tidal / Qobuz / SoundCloud / Spotify
-          </p>
-        </div>
-        {aiContentFilter && (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/15 text-primary text-[11px] font-bold">
-            <SlidersHorizontal size={12} /> Фильтр AI-спама активен
-          </span>
-        )}
-      </div>
+    <div className="screen">
+      <header className="screen-header">
+        <h1>Поиск</h1>
+      </header>
 
       {/* Search bar + live suggestions dropdown */}
       <div ref={inputWrapperRef} className="relative">
         <form onSubmit={handleSubmit} className="flex gap-3">
-          <div className="flex-1 flex items-center gap-3 bg-surface-container-high rounded-2xl px-4 py-3 focus-within: transition-colors shadow-sm">
+          <div className="search-field flex-1 flex items-center gap-3 bg-surface-container-high rounded-2xl px-4 py-3 transition-colors shadow-sm">
             <Search size={18} className="text-on-surface-variant flex-shrink-0" />
             <input
               type="text"
@@ -178,16 +198,20 @@ export default function SearchPage() {
                 if (suggestions.length > 0) setShowSuggestions(true);
               }}
               onChange={(e) => handleQueryChange(e.target.value)}
-              placeholder="Найти треки, альбомы, артистов, плейлисты или ISRC…"
-              className="flex-1 bg-transparent text-on-surface placeholder-on-surface-variant text-sm outline-none"
+              aria-label="Поисковый запрос"
+              placeholder="Трек, альбом, артист или плейлист"
+              className="search-input min-w-0 flex-1 bg-transparent text-on-surface placeholder-on-surface-variant text-sm outline-none focus-visible:outline-none"
               autoFocus
             />
             {query && !searching && (
               <button
                 type="button"
+                aria-label="Очистить запрос"
                 onClick={() => {
-                  setQuery('');
-                  setSuggestions([]);
+                  handleQueryChange('');
+                  setSubmittedQuery('');
+                  setSearchError(false);
+                  setSearchAllResults({ songs: [], albums: [], artists: [], playlists: [] });
                   setShowSuggestions(false);
                 }}
                 className="p-1 rounded-full hover:bg-surface-container text-on-surface-variant"
@@ -199,7 +223,7 @@ export default function SearchPage() {
           </div>
           <button
             type="submit"
-            disabled={searching || !query.trim()}
+            disabled={!query.trim()}
             className="px-6 py-3 bg-primary text-on-primary rounded-2xl text-sm font-bold hover:opacity-90 transition-opacity disabled:opacity-40 shadow-md shadow-primary/20"
           >
             Найти
@@ -207,7 +231,7 @@ export default function SearchPage() {
         </form>
 
         {showSuggestions && suggestions.length > 0 && (
-          <div className="absolute left-0 right-24 top-full mt-2 z-40 rounded-2xl bg-surface-container-high shadow-2xl overflow-hidden py-1">
+          <div className="search-suggestions absolute left-0 right-24 top-full mt-2 z-40 rounded-2xl bg-surface-container-high shadow-xl overflow-hidden py-1">
             {suggestions.map((sug, idx) => (
               <button
                 key={`${sug}-${idx}`}
@@ -231,12 +255,13 @@ export default function SearchPage() {
       </div>
 
       {/* Source Filter Pills */}
-      <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
+      <div role="group" aria-label="Источники поиска" className="filter-group">
         {SOURCE_TABS.map((tab) => {
           const active = activeSourceTab === tab.id;
           return (
             <button
               key={tab.id}
+              aria-pressed={active}
               onClick={() => {
                 setSourceFilter(tab.id as 'all' | AudioSourceId);
                 if (query.trim()) void runSearch(query, tab.id);
@@ -248,22 +273,20 @@ export default function SearchPage() {
               }`}
             >
               <span>{tab.label}</span>
-              {tab.badge && (
-                <span
-                  className={`text-[10px] px-1.5 py-0.5 rounded-md ${
-                    active ? 'bg-black/20 text-on-primary' : 'bg-surface-container-highest text-primary'
-                  }`}
-                >
-                  {tab.badge}
-                </span>
-              )}
             </button>
           );
         })}
       </div>
 
+      {!searched && searchHistory.length > 0 && (
+        <section aria-label="История поиска" className="space-y-2">
+          <div className="flex items-center justify-between"><h2 className="text-base font-semibold">Недавние запросы</h2><button type="button" className="text-xs text-on-surface-variant hover:text-primary" onClick={() => { setSearchHistory([]); try { localStorage.removeItem('archivetune.searchHistory'); } catch { /* storage unavailable */ } }}>Очистить</button></div>
+          <div className="flex flex-wrap gap-2">{searchHistory.map((item) => <button type="button" key={item} onClick={() => { setQuery(item); void runSearch(item, activeSourceTab); }} className="rounded-full bg-surface-container-high px-3 py-1.5 text-xs hover:bg-primary/20 transition-colors">{item}</button>)}</div>
+        </section>
+      )}
+
       {/* Entity filter tabs when albums/artists/playlists exist */}
-      {(filteredSongs.length > 0 || albums.length > 0 || artists.length > 0 || playlists.length > 0) && (
+      {!searching && (filteredSongs.length > 0 || albums.length > 0 || artists.length > 0 || playlists.length > 0) && (
         <div className="flex items-center gap-2 flex-wrap">
           {(
             [
@@ -276,6 +299,7 @@ export default function SearchPage() {
           ).map((et) => (
             <button
               key={et.id}
+              aria-pressed={entityFilter === et.id}
               onClick={() => setEntityFilter(et.id)}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
                 entityFilter === et.id
@@ -290,42 +314,22 @@ export default function SearchPage() {
       )}
 
       {/* Results sections */}
-      {searched &&
-      !searching &&
-      filteredSongs.length === 0 &&
-      albums.length === 0 &&
-      artists.length === 0 &&
-      playlists.length === 0 ? (
-        <div className="text-center py-16 text-on-surface-variant">
-          <Disc3 size={40} className="mx-auto mb-3 text-primary/40" />
-          <p className="text-base font-semibold">Ничего не найдено</p>
-          <p className="text-xs mt-1">Попробуйте сменить источник или уточнить запрос</p>
+      {searching ? (
+        <div className="status-panel" role="status">Ищем по выбранным источникам…</div>
+      ) : searchError ? (
+        <div className="status-panel" role="status">
+          <p>Поиск не загрузился</p>
+          <button className="text-primary font-semibold" onClick={() => void runSearch(submittedQuery, activeSourceTab)}>
+            Повторить поиск
+          </button>
         </div>
-      ) : !searched ? (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-4">
-          <div className="p-5 rounded-2xl bg-surface-container space-y-2">
-            <Sparkles size={22} className="text-primary" />
-            <h3 className="text-sm font-bold text-on-surface">Tidal &amp; Qobuz Hi-Res</h3>
-            <p className="text-xs text-on-surface-variant">
-              Авто-подбор 16/24-bit FLAC потоков через Smart Stream Resolver &amp; TrackMatching.
-            </p>
-          </div>
-          <div className="p-5 rounded-2xl bg-surface-container space-y-2">
-            <Radio size={22} className="text-primary" />
-            <h3 className="text-sm font-bold text-on-surface">8-Platform Failover Matrix</h3>
-            <p className="text-xs text-on-surface-variant">
-              Моментальное переключение между Tidal, Qobuz, YouTube Music, Deezer, JioSaavn и SoundCloud.
-            </p>
-          </div>
-          <div className="p-5 rounded-2xl bg-surface-container space-y-2">
-            <Music size={22} className="text-primary" />
-            <h3 className="text-sm font-bold text-on-surface">Word-by-Word Караоке</h3>
-            <p className="text-xs text-on-surface-variant">
-              Синхронизация по словам через BetterLyrics, Paxsenix, NetEase и транслитерация.
-            </p>
-          </div>
+      ) : searched && filteredSongs.length === 0 && albums.length === 0 && artists.length === 0 && playlists.length === 0 ? (
+        <div className="status-panel" role="status">
+          <Disc3 size={28} aria-hidden="true" className="text-primary" />
+          <p>По запросу «{submittedQuery}» ничего не найдено</p>
+          <p className="screen-description">Уточните запрос или выберите другой источник.</p>
         </div>
-      ) : (
+      ) : searched && (
         <div className="space-y-8">
           {/* Artists Grid */}
           {artists.length > 0 && (entityFilter === 'all' || entityFilter === 'artists') && (
@@ -389,7 +393,7 @@ export default function SearchPage() {
                     </div>
                     <p className="text-xs font-bold text-on-surface truncate w-full">{alb.title}</p>
                     <p className="text-[11px] text-on-surface-variant truncate w-full">
-                      {alb.artist || alb.year || 'Album'}
+                      {alb.artist || alb.year || 'Альбом'}
                     </p>
                   </button>
                 ))}
@@ -423,7 +427,7 @@ export default function SearchPage() {
                     </div>
                     <p className="text-xs font-bold text-on-surface truncate w-full">{pl.title}</p>
                     <p className="text-[11px] text-on-surface-variant truncate w-full">
-                      {pl.author || 'Playlist'}
+                      {pl.author || 'Плейлист'}
                     </p>
                   </button>
                 ))}
@@ -435,7 +439,7 @@ export default function SearchPage() {
           {filteredSongs.length > 0 && (entityFilter === 'all' || entityFilter === 'songs') && (
             <section className="space-y-2">
               <p className="text-xs text-on-surface-variant px-2 font-semibold">
-                Треки: {filteredSongs.length} результатов по запросу &ldquo;{query}&rdquo;
+                {trackCount(filteredSongs.length)} по запросу «{submittedQuery}»
               </p>
               <div className="space-y-1">
                 {filteredSongs.map((track: Track, i: number) => (

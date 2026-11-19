@@ -61,19 +61,7 @@ export default function TrackContextMenu() {
     setContextMenu(null);
     pushToast(`Скачивание "${track.title}"...`, 'info');
     try {
-      const uni = await window.electronAPI.providers.resolveUniversal({
-        id: track.id,
-        title: track.title,
-        artist: track.artist,
-        album: track.album,
-        duration: track.duration,
-        source: track.source,
-        path: track.path,
-      });
-      const res = await window.electronAPI.player.downloadTrack({
-        ...track,
-        streamUrl: uni.streamUrl || undefined,
-      });
+      const res = await window.electronAPI.player.downloadTrack(track);
       if (res.ok) pushToast(`Сохранено: ${res.filePath}`, 'lossless');
       else pushToast(res.error || 'Ошибка загрузки', 'error');
     } catch {
@@ -100,7 +88,7 @@ export default function TrackContextMenu() {
           pushToast(`Сохраняю «${track.title}» на устройство…`, 'info');
           try {
             const result = await window.electronAPI.offline.save(track);
-            pushToast(result.ok ? 'Трек доступен в Библиотека → Офлайн' : result.error || 'Ошибка сохранения', result.ok ? 'success' : 'error');
+            pushToast(result.ok ? 'Трек сохранён в разделе «Загрузки»' : result.error || 'Ошибка сохранения', result.ok ? 'success' : 'error');
           } catch { pushToast('Не удалось сохранить трек офлайн', 'error'); }
         }}
       />}
@@ -132,7 +120,7 @@ export default function TrackContextMenu() {
       />
       <MenuBtn
         icon={<Heart size={14} fill={liked ? 'currentColor' : 'none'} className={liked ? 'text-pink-400' : ''} />}
-        label={liked ? 'Убрать из Любимых' : 'В Любимые треки'}
+        label={liked ? 'Убрать из любимых' : 'Добавить в любимые'}
         onClick={() => {
           toggleLike(track);
           setContextMenu(null);
@@ -228,7 +216,7 @@ export default function TrackContextMenu() {
         />
       )}
       {track.source !== 'local' && (
-        <MenuBtn icon={<Download size={14} />} label="Скачать оффлайн" onClick={handleDownload} />
+        <MenuBtn icon={<Download size={14} />} label="Скачать" onClick={handleDownload} />
       )}
       <MenuBtn
         icon={<Ban size={14} className="text-red-400" />}

@@ -1,5 +1,8 @@
+import { useShallow } from 'zustand/react/shallow';
 import CacheSettings from '../components/CacheSettings';
 import React, { useState, useEffect } from 'react';
+import { motion } from 'framer-motion';
+import { INTERFACE_MOTION_PRESETS, useInterfaceMotion } from '../lib/useInterfaceMotion';
 import {
   Palette,
   Radio,
@@ -80,6 +83,8 @@ const SPONSORBLOCK_CATEGORIES = [
 
 export default function SettingsPage() {
   const navigate = useNavigate();
+  const { reducedMotion, presetId, panelTransition } = useInterfaceMotion();
+  const [previewAtEnd, setPreviewAtEnd] = useState(false);
   const {
     theme,
     setTheme,
@@ -91,6 +96,11 @@ export default function SettingsPage() {
     setUiScale,
     playerStyle,
     setPlayerStyle,
+    ambientBackgroundBlur,
+    reduceInterfaceMotion,
+    compactTrackRows,
+    glassEffect,
+    setAppearance,
     visualizerEnabled,
     visualizerStyle,
     setVisualizer,
@@ -123,6 +133,8 @@ export default function SettingsPage() {
     speed,
     crossfade,
     smartDjAutomix,
+    autoRadioOnQueueEnd,
+    prebufferNextTrack,
     automixMode,
     gaplessAlbum,
     preferredAudioSource,
@@ -154,7 +166,52 @@ export default function SettingsPage() {
     setAutoUpgradeLossless,
     setCanvasEnabled,
     setLyricsSettings,
-  } = usePlayerStore();
+  } = usePlayerStore(useShallow((state) => ({
+    normalization: state.normalization,
+    audioCompressor: state.audioCompressor,
+    exponentialVolume: state.exponentialVolume,
+    pitchSemitones: state.pitchSemitones,
+    bassBoost: state.bassBoost,
+    stereoWidener: state.stereoWidener,
+    silenceSkip: state.silenceSkip,
+    audioDevice: state.audioDevice,
+    speed: state.speed,
+    crossfade: state.crossfade,
+    smartDjAutomix: state.smartDjAutomix,
+    autoRadioOnQueueEnd: state.autoRadioOnQueueEnd,
+    prebufferNextTrack: state.prebufferNextTrack,
+    automixMode: state.automixMode,
+    gaplessAlbum: state.gaplessAlbum,
+    preferredAudioSource: state.preferredAudioSource,
+    enabledSources: state.enabledSources,
+    universalFallback: state.universalFallback,
+    autoUpgradeLossless: state.autoUpgradeLossless,
+    eqEnabled: state.eqEnabled,
+    eqPreset: state.eqPreset,
+    eqBands: state.eqBands,
+    canvasEnabled: state.canvasEnabled,
+    lyricsOffset: state.lyricsOffset,
+    lyricsFontSize: state.lyricsFontSize,
+    lyricsWordByWord: state.lyricsWordByWord,
+    lyricsRomanize: state.lyricsRomanize,
+    lyricsTranslate: state.lyricsTranslate,
+    lyricsTranslateLang: state.lyricsTranslateLang,
+    sponsorBlockEnabled: state.sponsorBlockEnabled,
+    sponsorBlockCategories: state.sponsorBlockCategories,
+    aiContentFilter: state.aiContentFilter,
+    setDspOption: state.setDspOption,
+    setCrossfade: state.setCrossfade,
+    setSmartDjAutomix: state.setSmartDjAutomix,
+    setAutomixMode: state.setAutomixMode,
+    setGaplessAlbum: state.setGaplessAlbum,
+    setEqualizerState: state.setEqualizerState,
+    setPreferredAudioSource: state.setPreferredAudioSource,
+    toggleSourceEnabled: state.toggleSourceEnabled,
+    setUniversalFallback: state.setUniversalFallback,
+    setAutoUpgradeLossless: state.setAutoUpgradeLossless,
+    setCanvasEnabled: state.setCanvasEnabled,
+    setLyricsSettings: state.setLyricsSettings,
+  })));
 
   const { syncingAll, syncAllPlatforms } = useAccountsStore();
   const { changeSpeed, toggleNormalization } = usePlayer();
@@ -168,10 +225,6 @@ export default function SettingsPage() {
     autoSyncSpotify: true,
     autoSyncYtm: true,
     autoSyncSc: true,
-    autoRadioOnQueueEnd: true,
-    prebufferNextTrack: true,
-    compactTrackRows: false,
-    ambientBackgroundBlur: true,
     replayGainMode: 'track' as 'off' | 'track' | 'album',
     targetLoudnessLufs: -14,
     keyboardShortcutsEnabled: true,
@@ -187,10 +240,6 @@ export default function SettingsPage() {
           autoSyncSpotify: db.settings.autoSyncSpotify ?? true,
           autoSyncYtm: db.settings.autoSyncYtm ?? true,
           autoSyncSc: db.settings.autoSyncSc ?? true,
-          autoRadioOnQueueEnd: db.settings.autoRadioOnQueueEnd ?? true,
-          prebufferNextTrack: db.settings.prebufferNextTrack ?? true,
-          compactTrackRows: db.settings.compactTrackRows ?? false,
-          ambientBackgroundBlur: db.settings.ambientBackgroundBlur ?? true,
           replayGainMode: db.settings.replayGainMode ?? 'track',
           targetLoudnessLufs: db.settings.targetLoudnessLufs ?? -14,
           keyboardShortcutsEnabled: db.settings.keyboardShortcutsEnabled ?? true,
@@ -269,42 +318,36 @@ export default function SettingsPage() {
   const handleImportBackup = async () => {
     const res = await window.electronAPI?.db?.importBackup();
     if (res?.state) {
-      pushToast('Бэкап восстановлен! Перезагрузите окно для применения.', 'success');
+      pushToast('Резервная копия восстановлена. Перезапустите приложение, чтобы применить изменения.', 'success');
     }
   };
 
   return (
-    <div className="p-6 max-w-5xl space-y-6 pb-28">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-black text-on-surface mb-1">
-            Расширенные Настройки — ArchiveTune V2 Release
-          </h1>
-          <p className="text-xs text-on-surface-variant">
-            Полный контроль над каждым модулем: Мульти-Сорс, Авто-Синхронизация, 10-Band EQ, Dual-Deck DSP, Визуал и Система
-          </p>
-        </div>
+    <div className="screen screen-settings">
+      <header className="screen-header">
+        <h1>Настройки</h1>
         <button
           onClick={() => void syncAllPlatforms(true)}
           disabled={syncingAll}
           className="px-4 py-2 rounded-xl bg-primary text-on-primary text-xs font-bold shadow-md hover:opacity-90 disabled:opacity-50"
         >
-          {syncingAll ? 'Синхронизация платформ…' : 'Синхронизировать Spotify + YTM + SC'}
+          {syncingAll ? 'Синхронизация…' : 'Синхронизировать медиатеку'}
         </button>
-      </div>
+      </header>
 
       {/* Category Filter Tabs */}
-      <div className="flex items-center gap-1.5 flex-wrap bg-surface-container p-1.5 rounded-2xl">
+      <div role="group" aria-label="Разделы настроек" className="filter-group">
         {[
-          { id: 'all', label: 'Все настройки' },
-          { id: 'sources', label: 'Мульти-Сорс & Синхронизация' },
-          { id: 'audio', label: 'Аудио, DSP & 10-Band EQ' },
-          { id: 'ui', label: 'Интерфейс & 8 Стилей' },
-          { id: 'lyrics', label: 'Тексты, Canvas & SponsorBlock' },
-          { id: 'system', label: 'Система, Хоткеи & Бэкап' },
+          { id: 'all', label: 'Все' },
+          { id: 'sources', label: 'Источники' },
+          { id: 'audio', label: 'Звук' },
+          { id: 'ui', label: 'Интерфейс' },
+          { id: 'lyrics', label: 'Тексты и видео' },
+          { id: 'system', label: 'Система' },
         ].map((cat) => (
           <button
             key={cat.id}
+            aria-pressed={settingsCategory === cat.id}
             onClick={() => setSettingsCategory(cat.id as any)}
             className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition ${
               settingsCategory === cat.id
@@ -319,34 +362,35 @@ export default function SettingsPage() {
 
       {/* 1. Theme, UI Scale, Visualizer & Player Styles */}
       {(settingsCategory === 'all' || settingsCategory === 'ui') && (
-      <section className="bg-surface-container rounded-2xl p-5 space-y-5">
+      <section className="settings-section p-5 space-y-5">
         <div className="flex items-center gap-3">
           <Palette className="text-primary" size={22} />
           <div>
             <h2 className="text-base font-bold text-on-surface">
-              Тема Material You, Стили плеера &amp; Визуализатор
+              Оформление
             </h2>
             <p className="text-xs text-on-surface-variant">
-              Адаптивные цвета из обложек, масштаб интерфейса и 8 макетов Now Playing
+              Тема, масштаб и внешний вид плеера
             </p>
           </div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className="text-xs font-semibold text-on-surface-variant mb-2 block">Режим темы</label>
+            <label className="text-xs font-semibold text-on-surface-variant mb-2 block">Тема</label>
             <div className="flex gap-2">
               {(['dark', 'amoled', 'light'] as const).map((mode) => (
                 <button
                   key={mode}
+                  aria-pressed={theme === mode}
                   onClick={() => setTheme(mode)}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold capitalize transition-all ${
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
                     theme === mode
                       ? 'bg-primary text-on-primary shadow'
                       : 'bg-surface-container-high text-on-surface hover:bg-surface-container-highest'
                   }`}
                 >
-                  {mode}
+                  {{ dark: 'Тёмная', amoled: 'AMOLED', light: 'Светлая' }[mode]}
                 </button>
               ))}
             </div>
@@ -354,11 +398,12 @@ export default function SettingsPage() {
 
           <div>
             <div className="flex items-center justify-between mb-2">
-              <label className="text-xs font-semibold text-on-surface-variant">Масштаб UI</label>
+              <label className="text-xs font-semibold text-on-surface-variant">Масштаб интерфейса</label>
               <span className="text-xs font-bold text-primary tabular-nums">{Math.round(uiScale * 100)}%</span>
             </div>
             <input
               type="range"
+              aria-label="Масштаб интерфейса"
               min={0.85}
               max={1.25}
               step={0.05}
@@ -371,16 +416,17 @@ export default function SettingsPage() {
 
         <div className="flex items-center justify-between p-3 rounded-xl bg-surface-container-high">
           <div>
-            <span className="text-sm font-semibold text-on-surface">Динамическая палитра из обложки</span>
-            <p className="text-xs text-on-surface-variant">Авто-извлечение акцента M3 для активного трека</p>
+            <span className="text-sm font-semibold text-on-surface">Цвета из обложки</span>
+            <p className="text-xs text-on-surface-variant">Меняет акцент интерфейса при смене трека</p>
           </div>
           <button
+            aria-pressed={dynamicColorFromArt}
             onClick={() => setDynamicColorFromArt(!dynamicColorFromArt)}
             className={`px-3.5 py-1.5 rounded-xl text-xs font-bold ${
               dynamicColorFromArt ? 'bg-primary text-on-primary' : 'bg-surface-container-highest text-on-surface-variant'
             }`}
           >
-            {dynamicColorFromArt ? 'Вкл' : 'Вручную'}
+            {dynamicColorFromArt ? 'Автоматически' : 'Вручную'}
           </button>
         </div>
 
@@ -398,6 +444,34 @@ export default function SettingsPage() {
                 title={c.name}
               />
             ))}
+            <input
+              type="color"
+              aria-label="Свой базовый цвет"
+              title="Свой базовый цвет"
+              value={seedColor}
+              onChange={(event) => setSeedColor(event.target.value)}
+              className="color-picker"
+            />
+          </div>
+        </div>
+
+        <div role="group" aria-labelledby="glass-effect-label" className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-surface-container-high p-3">
+          <span id="glass-effect-label" className="text-sm font-semibold">Матовое стекло</span>
+          <div className="flex flex-wrap gap-2">
+            {([
+              ['off', 'Без размытия'], ['soft', 'Мягкое'], ['full', 'Выраженное'],
+            ] as const).map(([value, label]) => (
+              <button
+                key={value}
+                aria-pressed={glassEffect === value}
+                onClick={() => setAppearance({ glassEffect: value })}
+                className={`rounded-full px-3.5 py-1.5 text-xs font-bold ${
+                  glassEffect === value ? 'bg-primary text-on-primary' : 'bg-surface-container text-on-surface'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
         </div>
 
@@ -406,7 +480,7 @@ export default function SettingsPage() {
           <div className="flex items-center gap-2.5">
             <Activity size={18} className="text-primary" />
             <div>
-              <span className="text-sm font-semibold text-on-surface">Аудио-визуализатор</span>
+              <span className="text-sm font-semibold text-on-surface">Визуализатор</span>
               <p className="text-xs text-on-surface-variant">Отображение спектра в полноэкранном плеере</p>
             </div>
           </div>
@@ -414,6 +488,7 @@ export default function SettingsPage() {
             {(['bars', 'wave', 'circular'] as const).map((st) => (
               <button
                 key={st}
+                aria-pressed={visualizerEnabled && visualizerStyle === st}
                 onClick={() => setVisualizer(true, st)}
                 className={`px-2.5 py-1 rounded-lg text-[11px] font-bold capitalize ${
                   visualizerEnabled && visualizerStyle === st
@@ -421,23 +496,77 @@ export default function SettingsPage() {
                     : 'bg-surface-container text-on-surface-variant'
                 }`}
               >
-                {st}
+                {{ bars: 'Столбцы', wave: 'Волна', circular: 'Круг' }[st]}
               </button>
             ))}
             <button
+              aria-pressed={visualizerEnabled}
               onClick={() => setVisualizer(!visualizerEnabled)}
               className={`px-3 py-1 rounded-lg text-[11px] font-bold ${
-                visualizerEnabled ? 'bg-emerald-500/20 text-emerald-400' : 'bg-surface-container text-on-surface-variant'
+                visualizerEnabled ? 'bg-primary text-on-primary' : 'bg-surface-container text-on-surface-variant'
               }`}
             >
-              {visualizerEnabled ? 'Вкл' : 'Выкл'}
+              {visualizerEnabled ? 'Включён' : 'Выключен'}
             </button>
           </div>
         </div>
 
+        <section aria-labelledby="motion-preset-heading" className="rounded-2xl bg-surface-container-high/70 p-4 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h3 id="motion-preset-heading" className="text-sm font-bold">Анимации интерфейса</h3>
+            <button
+              type="button"
+              onClick={() => setPreviewAtEnd(value => !value)}
+              disabled={reducedMotion}
+              className="rounded-xl bg-primary/15 px-3 py-2 text-xs font-bold text-primary hover:bg-primary/25 disabled:opacity-50"
+            >
+              Проверить анимацию
+            </button>
+          </div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {(Object.keys(INTERFACE_MOTION_PRESETS) as Array<keyof typeof INTERFACE_MOTION_PRESETS>).map(id => {
+              const preset = INTERFACE_MOTION_PRESETS[id];
+              const selected = id === presetId;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={() => {
+                    setAppearance({ interfaceMotionPreset: id });
+                    if (!reducedMotion) setPreviewAtEnd(value => !value);
+                  }}
+                  className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2.5 text-left transition-colors ${
+                    selected ? 'border-primary/55 bg-primary/15' : 'border-transparent bg-surface-container hover:bg-surface-container-highest'
+                  }`}
+                >
+                  <span>
+                    <span className="block text-xs font-bold">{preset.label}</span>
+                    <span className="mt-0.5 block text-[11px] text-on-surface-variant">{preset.description}</span>
+                  </span>
+                  {selected && <Check size={15} className="shrink-0 text-primary" aria-hidden />}
+                </button>
+              );
+            })}
+          </div>
+          {reducedMotion ? (
+            <p className="text-xs text-on-surface-variant">Сокращение движения включено. Пресет сохранится для обычного режима.</p>
+          ) : (
+            <div aria-hidden="true" className="relative mx-2 flex h-7 items-center">
+              <span className="absolute inset-x-0 h-px bg-primary/25" />
+              <motion.span
+                initial={false}
+                animate={{ left: previewAtEnd ? '88%' : '12%' }}
+                transition={panelTransition}
+                className="absolute -ml-2 h-4 w-4 rounded-full bg-primary"
+              />
+            </div>
+          )}
+        </section>
+
         {/* 8 Player Styles */}
         <div>
-          <label className="text-xs font-semibold text-on-surface-variant mb-2 block">Стиль экрана Now Playing</label>
+          <label className="text-xs font-semibold text-on-surface-variant mb-2 block">Стиль полноэкранного плеера</label>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
             {PLAYER_STYLES.map((st) => {
               const active = playerStyle === st.id;
@@ -462,27 +591,40 @@ export default function SettingsPage() {
         {/* Extra UI Module Toggles (Fooyin / Amberol / Tauon inspired) */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-2">
           <button
-            onClick={() => updateExtSetting({ ambientBackgroundBlur: !extSettings.ambientBackgroundBlur })}
+            onClick={() => setAppearance({ ambientBackgroundBlur: !ambientBackgroundBlur })}
             className="flex items-center justify-between p-3 rounded-xl bg-surface-container-high text-left"
           >
             <div>
-              <p className="text-xs font-bold text-on-surface">Амбиент-размытие фона (Ambient Blur)</p>
+              <p className="text-xs font-bold text-on-surface">Размытая обложка на фоне</p>
               <p className="text-[11px] text-on-surface-variant">Динамическая подсветка из обложки на фоне</p>
             </div>
-            <span className={`px-2.5 py-1 rounded-lg text-[11px] font-bold ${extSettings.ambientBackgroundBlur ? 'bg-primary text-on-primary' : 'bg-surface-container-highest text-on-surface-variant'}`}>
-              {extSettings.ambientBackgroundBlur ? 'Вкл' : 'Выкл'}
+            <span className={`px-2.5 py-1 rounded-lg text-[11px] font-bold ${ambientBackgroundBlur ? 'bg-primary text-on-primary' : 'bg-surface-container-highest text-on-surface-variant'}`}>
+              {ambientBackgroundBlur ? 'Вкл' : 'Выкл'}
             </span>
           </button>
           <button
-            onClick={() => updateExtSetting({ compactTrackRows: !extSettings.compactTrackRows })}
+            aria-pressed={reduceInterfaceMotion}
+            onClick={() => setAppearance({ reduceInterfaceMotion: !reduceInterfaceMotion })}
+            className="flex items-center justify-between gap-3 p-3 rounded-xl bg-surface-container-high text-left"
+          >
+            <div>
+              <p className="text-xs font-bold text-on-surface">Меньше анимации</p>
+              <p className="text-[11px] text-on-surface-variant">Без пружинных переходов, инерции карусели и движения визуализатора</p>
+            </div>
+            <span className={`px-2.5 py-1 rounded-lg text-[11px] font-bold ${
+              reduceInterfaceMotion ? 'bg-primary text-on-primary' : 'bg-surface-container-highest text-on-surface-variant'
+            }`}>{reduceInterfaceMotion ? 'Вкл' : 'Выкл'}</span>
+          </button>
+          <button
+            onClick={() => setAppearance({ compactTrackRows: !compactTrackRows })}
             className="flex items-center justify-between p-3 rounded-xl bg-surface-container-high text-left"
           >
             <div>
-              <p className="text-xs font-bold text-on-surface">Компактные строки списков (Fooyin Mode)</p>
+              <p className="text-xs font-bold text-on-surface">Компактные списки треков</p>
               <p className="text-[11px] text-on-surface-variant">Уменьшенные отступы для больших медиатек</p>
             </div>
-            <span className={`px-2.5 py-1 rounded-lg text-[11px] font-bold ${extSettings.compactTrackRows ? 'bg-primary text-on-primary' : 'bg-surface-container-highest text-on-surface-variant'}`}>
-              {extSettings.compactTrackRows ? 'Вкл' : 'Выкл'}
+            <span className={`px-2.5 py-1 rounded-lg text-[11px] font-bold ${compactTrackRows ? 'bg-primary text-on-primary' : 'bg-surface-container-highest text-on-surface-variant'}`}>
+              {compactTrackRows ? 'Вкл' : 'Выкл'}
             </span>
           </button>
         </div>
@@ -491,12 +633,12 @@ export default function SettingsPage() {
 
       {/* 2. Audio Engine, Output Device, AutoMix & DSP */}
       {(settingsCategory === 'all' || settingsCategory === 'audio') && (
-      <section className="bg-surface-container rounded-2xl p-5 space-y-5">
+      <section className="settings-section p-5 space-y-5">
         <div className="flex items-center gap-3">
           <Volume2 className="text-primary" size={22} />
           <div>
             <h2 className="text-base font-bold text-on-surface">
-              Аудио-движок mpv, Dual-Deck AutoMix &amp; DSP
+              Воспроизведение и звук
             </h2>
             <p className="text-xs text-on-surface-variant">
               Устройство вывода ALSA/Pulse/PipeWire, кроссфейд, питч, бас-буст и экспандер громкости
@@ -507,7 +649,7 @@ export default function SettingsPage() {
         {/* Audio output device selector */}
         <div>
           <label className="text-xs font-semibold text-on-surface-variant mb-2 block">
-            Устройство вывода звука (Output Device)
+            Устройство вывода
           </label>
           <select
             value={audioDevice || 'auto'}
@@ -634,10 +776,10 @@ export default function SettingsPage() {
             { label: 'Gapless внутри альбома', desc: 'Бесшовное переключение', val: gaplessAlbum, fn: () => setGaplessAlbum(!gaplessAlbum) },
             { label: 'Нормализация (dynaudnorm)', desc: 'Выравнивание громкости', val: normalization, fn: () => void toggleNormalization(!normalization) },
             { label: 'Аудио-компрессор', desc: 'Мягкий лимитер пиков', val: audioCompressor, fn: () => setDspOption({ audioCompressor: !audioCompressor }) },
-            { label: 'Логарифмическая громкость (Exp Volume)', desc: 'Естественная кривая громкости (x^1.65)', val: exponentialVolume, fn: () => setDspOption({ exponentialVolume: !exponentialVolume }) },
+            { label: 'Плавная регулировка громкости', desc: 'Более точная настройка на малой громкости', val: exponentialVolume, fn: () => setDspOption({ exponentialVolume: !exponentialVolume }) },
             { label: 'Пропуск тишины (Skip Silence)', desc: 'Обрезка тихих пауз в начале и конце', val: silenceSkip, fn: () => setDspOption({ silenceSkip: !silenceSkip }) },
-            { label: 'Авто-радио после конца очереди', desc: 'Бесконечный автоплей похожих треков', val: extSettings.autoRadioOnQueueEnd, fn: () => updateExtSetting({ autoRadioOnQueueEnd: !extSettings.autoRadioOnQueueEnd }) },
-            { label: 'Предзагрузка трека (Deck B Prebuffer)', desc: 'Мгновенный старт следующего трека в памяти', val: extSettings.prebufferNextTrack, fn: () => updateExtSetting({ prebufferNextTrack: !extSettings.prebufferNextTrack }) },
+            { label: 'Авто-радио после конца очереди', desc: 'Бесконечный автоплей похожих треков', val: autoRadioOnQueueEnd, fn: () => setDspOption({ autoRadioOnQueueEnd: !autoRadioOnQueueEnd }) },
+            { label: 'Предзагрузка трека (Deck B Prebuffer)', desc: 'Мгновенный старт следующего трека в памяти', val: prebufferNextTrack, fn: () => setDspOption({ prebufferNextTrack: !prebufferNextTrack }) },
           ].map((item) => (
             <button
               key={item.label}
@@ -723,12 +865,12 @@ export default function SettingsPage() {
 
       {/* 3. Multi-Source & Smart Routing + Unified Library Sync */}
       {(settingsCategory === 'all' || settingsCategory === 'sources') && (
-      <section className="bg-surface-container rounded-2xl p-5 space-y-4">
+      <section className="settings-section p-5 space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-3">
             <Radio className="text-primary" size={22} />
             <div>
-              <h2 className="text-base font-bold text-on-surface">Источники звука &amp; Smart Routing</h2>
+              <h2 className="text-base font-bold text-on-surface">Источники звука</h2>
               <p className="text-xs text-on-surface-variant">Приоритет платформ и уведомления автопереключения</p>
             </div>
           </div>
@@ -743,7 +885,8 @@ export default function SettingsPage() {
         <div className="flex flex-wrap gap-2">
           {(
             [
-              { id: 'auto', label: 'Auto Smart Matrix' },
+              { id: 'auto', label: 'Авто' },
+              { id: 'spotify', label: 'Spotify' },
               { id: 'tidal', label: 'Tidal FLAC' },
               { id: 'qobuz', label: 'Qobuz Hi-Res' },
               { id: 'youtube', label: 'YouTube Music' },
@@ -868,11 +1011,11 @@ export default function SettingsPage() {
 
       {/* 4. Lyrics, Canvas & AI Content Filter */}
       {(settingsCategory === 'all' || settingsCategory === 'lyrics') && (
-      <section className="bg-surface-container rounded-2xl p-5 space-y-4">
+      <section className="settings-section p-5 space-y-4">
         <div className="flex items-center gap-3">
           <Sparkles className="text-primary" size={22} />
           <div>
-            <h2 className="text-base font-bold text-on-surface">Тексты песен, Canvas &amp; AI-фильтр</h2>
+            <h2 className="text-base font-bold text-on-surface">Тексты песен и Canvas</h2>
             <p className="text-xs text-on-surface-variant">Караоке по словам, транслитерация, сдвиг тайминга и фильтр AI-контента</p>
           </div>
         </div>
@@ -947,7 +1090,7 @@ export default function SettingsPage() {
 
       {/* 5. SponsorBlock */}
       {(settingsCategory === 'all' || settingsCategory === 'lyrics') && (
-      <section className="bg-surface-container rounded-2xl p-5 space-y-4">
+      <section className="settings-section p-5 space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Shield className="text-primary" size={22} />
@@ -990,11 +1133,11 @@ export default function SettingsPage() {
 
       {/* 6. Desktop, Local HTTP API & Scrobbling */}
       {(settingsCategory === 'all' || settingsCategory === 'system') && (
-      <section className="bg-surface-container rounded-2xl p-5 space-y-5">
+      <section className="settings-section p-5 space-y-5">
         <div className="flex items-center gap-3">
           <Monitor className="text-primary" size={22} />
           <div>
-            <h2 className="text-base font-bold text-on-surface">Десктоп, Local HTTP API &amp; Скробблинг</h2>
+            <h2 className="text-base font-bold text-on-surface">Системная интеграция</h2>
             <p className="text-xs text-on-surface-variant">Системный трей, MPRIS2, Discord RPC, локальный сервер :26538, Last.fm и ListenBrainz</p>
           </div>
         </div>
@@ -1065,11 +1208,11 @@ export default function SettingsPage() {
 
       {/* 7. Downloads & Full Backup / Restore */}
       {(settingsCategory === 'all' || settingsCategory === 'system') && (
-      <section className="bg-surface-container rounded-2xl p-5 space-y-4">
+      <section className="settings-section p-5 space-y-4">
         <div className="flex items-center gap-3">
           <Download className="text-primary" size={22} />
           <div>
-            <h2 className="text-base font-bold text-on-surface">Загрузки &amp; Резервная копия (JSON / SQLite)</h2>
+            <h2 className="text-base font-bold text-on-surface">Загрузки и резервные копии</h2>
             <p className="text-xs text-on-surface-variant">Формат оффлайн-сохранения и полный бэкап библиотеки</p>
           </div>
         </div>
@@ -1130,7 +1273,7 @@ export default function SettingsPage() {
       )}
 
       {/* About */}
-      <section className="bg-surface-container rounded-2xl p-5 flex items-center justify-between flex-wrap gap-4">
+      <section className="settings-section p-5 flex items-center justify-between flex-wrap gap-4">
         <div className="flex items-center gap-3">
           <Info className="text-primary" size={20} />
           <div>

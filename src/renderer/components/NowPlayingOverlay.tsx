@@ -32,8 +32,13 @@ import {
   FastForward,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { usePlayerStore, useUIStore, PlayerStyleId, extractDominantColorFromImage } from '../store';
+import { REPEAT_LABELS } from '../lib/interfaceText';
+import PlaybackPulse from './PlaybackPulse';
+import SeekBar from './SeekBar';
+import { useInterfaceMotion } from '../lib/useInterfaceMotion';
+import { usePlayerStore, useUIStore, PlayerStyleId, generateMaterialYouScheme, hexToRgb } from '../store';
 import { usePlayer } from '../lib/usePlayer';
+import { useSpotifyLyricsId } from '../lib/useSpotifyLyricsId';
 import AudioVisualizer from './AudioVisualizer';
 
 interface LyricWord {
@@ -69,12 +74,12 @@ function formatTimecode(seconds: number): string {
 
 const SPEED_OPTIONS = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 const SLEEP_TIMER_OPTIONS: Array<{ label: string; value: number | 'track' | null }> = [
-  { label: 'Off', value: null },
-  { label: '15 Minutes', value: 15 },
-  { label: '30 Minutes', value: 30 },
-  { label: '45 Minutes', value: 45 },
-  { label: '60 Minutes', value: 60 },
-  { label: 'End of Song', value: 'track' },
+  { label: 'Выключить', value: null },
+  { label: '15 мин', value: 15 },
+  { label: '30 мин', value: 30 },
+  { label: '45 мин', value: 45 },
+  { label: '60 мин', value: 60 },
+  { label: 'До конца трека', value: 'track' },
 ];
 
 const PLAYER_STYLES: Array<{ id: PlayerStyleId; label: string; badge: string }> = [
@@ -100,10 +105,11 @@ const EQ_PRESET_MAP: Record<string, number[]> = {
 };
 
 export default function NowPlayingOverlay() {
+  const { reducedMotion, panelTransition, controlTransition, press } = useInterfaceMotion();
   const {
     currentTrack,
     isPlaying,
-    isScrubbing,
+    loading,
     automixing,
     position,
     duration,
@@ -134,7 +140,6 @@ export default function NowPlayingOverlay() {
     queue,
     setRepeat,
     toggleShuffle,
-    setIsScrubbing,
     setSmartDjAutomix,
     setEqualizerState,
     setSleepTimer,
@@ -145,23 +150,19 @@ export default function NowPlayingOverlay() {
   } = usePlayerStore();
 
   const {
+    ambientBackgroundBlur,
     playerStyle,
     setPlayerStyle,
     setShowNowPlaying,
     setSourceSwitcherTrack,
     setAuditTarget,
+    seedColor,
     dynamicColorFromArt,
     activeArtColor,
-    setActiveArtColor,
+    activeArtGradientColors,
+    theme,
   } = useUIStore();
 
-  useEffect(() => {
-    if (dynamicColorFromArt && currentTrack?.thumbnail) {
-      extractDominantColorFromImage(currentTrack.thumbnail).then((hex) => {
-        if (hex) setActiveArtColor(hex);
-      });
-    }
-  }, [currentTrack?.id, currentTrack?.thumbnail, dynamicColorFromArt, setActiveArtColor]);
   const setLyricsOffset = (val: number) => setLyricsSettings({ lyricsOffset: val });
   const setLyricsFontSize = (val: 'small' | 'medium' | 'large') =>
     setLyricsSettings({ lyricsFontSize: val });
@@ -192,7 +193,7 @@ export default function NowPlayingOverlay() {
   const [selectedShareLines, setSelectedShareLines] = useState<number[]>([]);
   const [showSleepMenu, setShowSleepMenu] = useState(false);
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
-  const [downloadFormat, setDownloadFormat] = useState<'mp3' | 'flac' | 'opus'>('mp3');
+  const [downloadFormat, setDownloadFormat] = useState<'mp3' | 'flac' | 'opus'>(() => useUIStore.getState().downloadFormat);
   const [downloadState, setDownloadState] = useState<'idle' | 'downloading' | 'done' | 'error'>(
     'idle'
   );
@@ -200,26 +201,31 @@ export default function NowPlayingOverlay() {
   const [scrubPosition, setScrubPosition] = useState<number | null>(null);
   const [arrowPulse, setArrowPulse] = useState<'prev' | 'next' | null>(null);
 
-  const activeLyricRef = useRef<HTMLDivElement>(null);
+  const activeLyricRef = useRef<HTMLButtonElement>(null);
   const lyricsContainerRef = useRef<HTMLDivElement>(null);
 
-  const displayPosition = isScrubbing && scrubPosition !== null ? scrubPosition : position;
+  const displayPosition = scrubPosition ?? position;
   const effectivePosition = displayPosition + lyricsOffset / 1000;
   const activeIndex = lyrics.reduce((acc, line, i) => {
     if (line.time <= effectivePosition) return i;
     return acc;
   }, -1);
 
+  const spotifyLyricsId = useSpotifyLyricsId(currentTrack);
+
   useEffect(() => {
     if (!currentTrack) return;
+    let cancelled = false;
     setLyrics([]);
+    setSelectedShareLines([]);
     setPlainLyrics('');
     setLyricsSource('Searching 10+ providers...');
     setHasWordSync(false);
 
     window.electronAPI?.lyrics
-      .get(currentTrack.title, currentTrack.artist, currentTrack.duration, currentTrack.id)
+      .get(currentTrack.title, currentTrack.artist, currentTrack.duration, currentTrack.id, spotifyLyricsId)
       .then((res) => {
+        if (cancelled) return;
         setLyrics(res.synced || []);
         setPlainLyrics(res.plain || '');
         setLyricsSource(res.source || 'none');
@@ -229,15 +235,17 @@ export default function NowPlayingOverlay() {
         }
       })
       .catch(() => {
-        setLyricsSource('none');
+        if (!cancelled) setLyricsSource('none');
       });
-  }, [currentTrack?.id, currentTrack?.title, lyricsTranslate, lyricsRomanize]);
+    return () => { cancelled = true; };
+  }, [currentTrack?.id, currentTrack?.title, currentTrack?.artist, currentTrack?.duration, spotifyLyricsId, lyricsTranslate, lyricsRomanize]);
 
   useEffect(() => {
-    if (!currentTrack || !canvasEnabled) {
+    if (!currentTrack || !canvasEnabled || reducedMotion) {
       setCanvasData(null);
       return;
     }
+    let cancelled = false;
     setCanvasData(null);
     window.electronAPI?.canvas
       .get({
@@ -246,21 +254,22 @@ export default function NowPlayingOverlay() {
         artist: currentTrack.artist,
       })
       .then((res) => {
-        if (res?.videoUrl) {
+        if (!cancelled && res?.videoUrl) {
           setCanvasData({ videoUrl: res.videoUrl, source: res.source });
         }
       })
       .catch(() => {});
-  }, [currentTrack?.id, currentTrack?.title, canvasEnabled]);
+    return () => { cancelled = true; };
+  }, [currentTrack?.id, currentTrack?.title, currentTrack?.artist, canvasEnabled, reducedMotion]);
 
   useEffect(() => {
     const container = lyricsContainerRef.current;
     const el = activeLyricRef.current;
     if (container && el) {
       const targetTop = el.offsetTop - container.clientHeight / 2 + el.clientHeight / 2;
-      container.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
+      container.scrollTo({ top: Math.max(0, targetTop), behavior: reducedMotion ? 'auto' : 'smooth' });
     }
-  }, [activeIndex, playerStyle]);
+  }, [activeIndex, playerStyle, reducedMotion]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -279,7 +288,7 @@ export default function NowPlayingOverlay() {
   if (!currentTrack) return null;
 
   const liked = isTrackLiked(currentTrack);
-  const coverCompressed = !isPlaying || isScrubbing;
+  const coverCompressed = !isPlaying || scrubPosition !== null;
 
   const handleInstantPrev = () => {
     setArrowPulse('prev');
@@ -302,22 +311,39 @@ export default function NowPlayingOverlay() {
   const handleDownload = async () => {
     if (downloadState === 'downloading' || !currentTrack) return;
     setDownloadState('downloading');
-    setDownloadMsg(`Saving ${downloadFormat.toUpperCase()} + LRC to ~/Music/ArchiveTune...`);
+    setDownloadMsg(`Сохранение ${downloadFormat.toUpperCase()}...`);
     try {
-      const res = await downloadCurrentTrack(downloadFormat);
+      const { embedMetadataAndLyrics } = useUIStore.getState();
+      let lrcContent: string | undefined;
+      if (embedMetadataAndLyrics) {
+        if (lyrics && lyrics.length > 0) {
+          lrcContent = lyrics
+            .map((l) => {
+              const m = Math.floor(l.time / 60);
+              const s = Math.floor(l.time % 60);
+              const cs = Math.floor((l.time % 1) * 100);
+              return `[${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}]${l.text}`;
+            })
+            .join('\n');
+        } else if (plainLyrics) {
+          lrcContent = plainLyrics;
+        }
+      }
+
+      const res = await downloadCurrentTrack(downloadFormat, lrcContent);
       if (res?.ok) {
         setDownloadState('done');
-        setDownloadMsg('Saved to ~/Music/ArchiveTune');
-        setTimeout(() => setDownloadState('idle'), 4000);
+        setDownloadMsg([res.filePath ? `Сохранено: ${res.filePath}` : 'Файл сохранён', res.warning].filter(Boolean).join(' · '));
+        setTimeout(() => setDownloadState('idle'), 5000);
       } else {
         setDownloadState('error');
-        setDownloadMsg(res?.error || 'Download failed');
-        setTimeout(() => setDownloadState('idle'), 4000);
+        setDownloadMsg(res?.error || 'Ошибка при скачивании трека');
+        setTimeout(() => setDownloadState('idle'), 5000);
       }
-    } catch {
+    } catch (err: any) {
       setDownloadState('error');
-      setDownloadMsg('Download failed');
-      setTimeout(() => setDownloadState('idle'), 4000);
+      setDownloadMsg(err?.message || 'Ошибка при скачивании трека');
+      setTimeout(() => setDownloadState('idle'), 5000);
     }
   };
 
@@ -328,16 +354,19 @@ export default function NowPlayingOverlay() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    const activeColor = (dynamicColorFromArt && activeArtColor) || seedColor || '#cbb9f5';
+    const activeRgb = hexToRgb(activeColor);
+    const backdrop = generateMaterialYouScheme(activeColor, theme, activeArtGradientColors);
     const grad = ctx.createLinearGradient(0, 0, 1080, 1350);
-    grad.addColorStop(0, '#1e162b');
-    grad.addColorStop(0.5, '#12101b');
-    grad.addColorStop(1, '#09080d');
+    grad.addColorStop(0, backdrop.backdropTop);
+    grad.addColorStop(0.5, backdrop.backdropMid);
+    grad.addColorStop(1, backdrop.backdropBottom);
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, 1080, 1350);
 
     const radial = ctx.createRadialGradient(850, 250, 40, 850, 250, 520);
-    radial.addColorStop(0, 'rgba(203, 185, 245, 0.28)');
-    radial.addColorStop(1, 'rgba(203, 185, 245, 0)');
+    radial.addColorStop(0, `rgba(${activeRgb.r}, ${activeRgb.g}, ${activeRgb.b}, 0.35)`);
+    radial.addColorStop(1, `rgba(${activeRgb.r}, ${activeRgb.g}, ${activeRgb.b}, 0)`);
     ctx.fillStyle = radial;
     ctx.fillRect(0, 0, 1080, 1350);
 
@@ -345,7 +374,7 @@ export default function NowPlayingOverlay() {
     ctx.font = 'bold 46px sans-serif';
     ctx.fillText(currentTrack.title.slice(0, 34), 90, 150);
 
-    ctx.fillStyle = '#cbb9f5';
+    ctx.fillStyle = activeColor;
     ctx.font = '600 32px sans-serif';
     ctx.fillText(currentTrack.artist.slice(0, 42), 90, 205);
 
@@ -415,8 +444,12 @@ export default function NowPlayingOverlay() {
     large: 'text-4xl md:text-5xl font-black text-white scale-[1.04] origin-left drop-shadow-[0_0_36px_rgba(255,255,255,0.6)]',
   };
 
+  const fullscreenCanvas = ambientBackgroundBlur && playerStyle === 'v8_immersive' && canvasEnabled
+    ? canvasData?.videoUrl
+    : undefined;
+
   const renderArtworkMedia = (className = 'w-full h-full object-cover') => {
-    if (canvasEnabled && canvasData?.videoUrl) {
+    if (canvasEnabled && canvasData?.videoUrl && !fullscreenCanvas) {
       return (
         <video
           key={`cover-${canvasData.videoUrl}`}
@@ -430,7 +463,17 @@ export default function NowPlayingOverlay() {
       );
     }
     if (currentTrack.thumbnail) {
-      return <img src={currentTrack.thumbnail} alt={currentTrack.title} className={className} />;
+      return (
+        <motion.img
+          key={currentTrack.id}
+          src={currentTrack.thumbnail}
+          alt={currentTrack.title}
+          initial={reducedMotion ? false : { opacity: 0, scale: 1.06 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ ...panelTransition, opacity: { duration: reducedMotion ? 0 : 0.18 } }}
+          className={className}
+        />
+      );
     }
     return (
       <div className="w-full h-full bg-surface-container-high flex items-center justify-center text-6xl">
@@ -439,39 +482,15 @@ export default function NowPlayingOverlay() {
     );
   };
 
-  const renderSeekSlider = (accentClass = 'accent-primary h-2') => (
+  const renderSeekSlider = (className = 'text-primary') => (
     <div className="w-full space-y-1.5">
-      <input
-        type="range"
-        min={0}
-        max={duration || 100}
-        step={0.2}
-        value={displayPosition}
-        onMouseDown={() => {
-          setIsScrubbing(true);
-          setScrubPosition(position);
-        }}
-        onTouchStart={() => {
-          setIsScrubbing(true);
-          setScrubPosition(position);
-        }}
-        onChange={(e) => {
-          const val = parseFloat(e.target.value);
-          setScrubPosition(val);
-          if (!isScrubbing) void seek(val);
-        }}
-        onMouseUp={(e) => {
-          const val = parseFloat((e.target as HTMLInputElement).value);
-          setIsScrubbing(false);
-          setScrubPosition(null);
-          void seek(val);
-        }}
-        onTouchEnd={() => {
-          if (scrubPosition !== null) void seek(scrubPosition);
-          setIsScrubbing(false);
-          setScrubPosition(null);
-        }}
-        className={`w-full cursor-pointer rounded-lg ${accentClass}`}
+      <SeekBar
+        key={currentTrack?.id}
+        duration={duration}
+        position={displayPosition}
+        onPreview={setScrubPosition}
+        onSeek={seek}
+        className={className}
       />
       <div className="flex justify-between text-xs text-on-surface-variant font-semibold tabular-nums">
         <span>{formatTime(displayPosition)}</span>
@@ -531,7 +550,7 @@ export default function NowPlayingOverlay() {
         }`}
       >
         <Sparkles size={13} />
-        <span>Norm</span>
+        <span>Нормализация</span>
       </button>
 
       {/* Sleep Timer */}
@@ -550,10 +569,10 @@ export default function NowPlayingOverlay() {
           <Moon size={13} />
           <span>
             {sleepAfterTrack
-              ? 'End of Track'
+              ? 'До конца трека'
               : sleepTimerRemainingSec !== null
-                ? `${Math.ceil(sleepTimerRemainingSec / 60)}m`
-                : 'Sleep'}
+                ? `${Math.ceil(sleepTimerRemainingSec / 60)} мин`
+                : 'Таймер сна'}
           </span>
         </button>
         {showSleepMenu && (
@@ -606,7 +625,7 @@ export default function NowPlayingOverlay() {
             ? 'bg-primary text-on-primary'
             : 'bg-surface-container-high text-on-surface-variant hover:text-on-surface'
         }`}
-        title="A-B Loop (нажмите для установки точки A, затем B, затем сброса)"
+        title="Повтор фрагмента. Нажмите для установки начала, конца и сброса"
       >
         <Repeat1 size={13} />
         <span>
@@ -623,6 +642,7 @@ export default function NowPlayingOverlay() {
         <div className="flex items-center bg-surface-container-high rounded-full p-0.5">
           <select
             value={downloadFormat}
+            aria-label="Формат загрузки"
             onChange={(e) => setDownloadFormat(e.target.value as 'mp3' | 'flac' | 'opus')}
             className="bg-transparent text-[11px] font-bold text-primary pl-2.5 pr-1 py-1 outline-none cursor-pointer"
           >
@@ -651,10 +671,10 @@ export default function NowPlayingOverlay() {
             />
             <span>
               {downloadState === 'downloading'
-                ? 'Saving...'
+                ? 'Скачиваем…'
                 : downloadState === 'done'
-                  ? 'Saved!'
-                  : 'Save'}
+                  ? 'Скачано'
+                  : 'Скачать'}
             </span>
           </button>
         </div>
@@ -669,44 +689,49 @@ export default function NowPlayingOverlay() {
         className={`p-2 rounded-full transition-colors ${
           shuffle ? 'text-primary bg-primary/15' : 'text-on-surface-variant hover:text-on-surface'
         }`}
-        title={shuffle ? 'Shuffle On' : 'Shuffle Off'}
+        title="Перемешивание" aria-pressed={shuffle}
       >
         <Shuffle size={19} />
       </button>
 
       <motion.button
-        animate={arrowPulse === 'prev' ? { scale: 0.78, x: -8 } : { scale: 1, x: 0 }}
-        transition={{ type: 'spring', stiffness: 500, damping: 18 }}
+        animate={!reducedMotion && arrowPulse === 'prev' ? { scale: 0.78, x: -8 } : { scale: 1, x: 0 }}
+        transition={controlTransition}
         onClick={handleInstantPrev}
         className="p-2.5 text-on-surface hover:text-primary transition-colors"
-        title="Previous"
+        title="Предыдущий трек"
       >
         <SkipBack size={28} />
       </motion.button>
 
       <motion.button
-        whileTap={{ scale: 0.86 }}
+        whileTap={press}
         animate={{ borderRadius: isPlaying ? '22px' : '36px' }}
-        transition={{ type: 'spring', stiffness: 380, damping: 22 }}
+        transition={controlTransition}
         onClick={() => (isPlaying ? pause() : resume())}
-        className={`${playSize} ${playColor} flex items-center justify-center shadow-xl shadow-primary/30 hover:opacity-95`}
+        disabled={loading}
+        aria-busy={loading}
+        aria-label={loading ? 'Запускаем трек…' : isPlaying ? 'Пауза' : 'Воспроизвести'}
+        className={`playback-trigger ${playSize} ${playColor} flex items-center justify-center shadow-xl shadow-primary/30 hover:opacity-95`}
       >
+        <PlaybackPulse />
         <motion.div
-          key={isPlaying ? 'pause-icon' : 'play-icon'}
-          initial={{ scale: 0.6, rotate: -20, opacity: 0 }}
+          key={loading ? 'loading' : isPlaying ? 'pause-icon' : 'play-icon'}
+          initial={reducedMotion ? false : { scale: 0.6, rotate: -20, opacity: 0 }}
           animate={{ scale: 1, rotate: 0, opacity: 1 }}
-          transition={{ type: 'spring', stiffness: 420, damping: 20 }}
+          transition={controlTransition}
         >
-          {isPlaying ? <Pause size={28} /> : <Play size={28} className="translate-x-0.5" />}
+          {loading ? <span className="block w-6 h-6 rounded-full border-2 border-current border-t-transparent animate-spin playback-spinner" />
+            : isPlaying ? <Pause size={28} /> : <Play size={28} className="translate-x-0.5" />}
         </motion.div>
       </motion.button>
 
       <motion.button
-        animate={arrowPulse === 'next' ? { scale: 0.78, x: 8 } : { scale: 1, x: 0 }}
-        transition={{ type: 'spring', stiffness: 500, damping: 18 }}
+        animate={!reducedMotion && arrowPulse === 'next' ? { scale: 0.78, x: 8 } : { scale: 1, x: 0 }}
+        transition={controlTransition}
         onClick={handleInstantNext}
         className="p-2.5 text-on-surface hover:text-primary transition-colors"
-        title="Next"
+        title="Следующий трек"
       >
         <SkipForward size={28} />
       </motion.button>
@@ -718,7 +743,7 @@ export default function NowPlayingOverlay() {
             ? 'text-primary bg-primary/15'
             : 'text-on-surface-variant hover:text-on-surface'
         }`}
-        title={`Repeat: ${repeat}`}
+        title={`Повтор · ${REPEAT_LABELS[repeat]}`}
       >
         <Repeat size={19} />
         {repeat === 'one' && (
@@ -738,25 +763,24 @@ export default function NowPlayingOverlay() {
             <div>
               <h3 className="text-base font-bold text-on-surface flex items-center gap-2">
                 <Sliders size={18} className="text-primary" />
-                <span>Real-Time DSP &amp; Smart DJ Automix</span>
+                <span>Эквалайзер и переходы</span>
               </h3>
-              <p className="text-xs text-on-surface-variant">Dual-Deck mpv lavfi audio pipeline</p>
             </div>
             <button
               onClick={() => setShowDspModal(false)}
               className="text-xs px-3 py-1 rounded-lg bg-surface-container-high text-on-surface-variant hover:text-on-surface"
             >
-              Back to Lyrics
+              К тексту песни
             </button>
           </div>
 
           <div className="flex items-center justify-between p-4 rounded-2xl bg-surface-container-high/80  ">
             <div>
               <p className="text-sm font-bold text-on-surface">
-                Smart DJ Automix (BPM Phrase Sync + Bass Swap)
+                Автосведение
               </p>
               <p className="text-xs text-on-surface-variant mt-0.5">
-                Aligns transitions to 2/4/8 bar musical phrases, trims trailing silence, and swaps bass
+                Подбирает переходы по ритму треков и убирает паузы
               </p>
             </div>
             <button
@@ -767,7 +791,7 @@ export default function NowPlayingOverlay() {
                   : 'bg-surface-container-highest text-on-surface-variant'
               }`}
             >
-              {smartDjAutomix ? 'ENABLED' : 'OFF'}
+              {smartDjAutomix ? 'Включено' : 'Выключено'}
             </button>
           </div>
 
@@ -775,7 +799,7 @@ export default function NowPlayingOverlay() {
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="flex items-center gap-3">
                 <span className="text-sm font-bold text-on-surface">
-                  10-Band Parametric Equalizer
+                  10-полосный эквалайзер
                 </span>
                 <button
                   onClick={() => setEqualizerState(!eqEnabled, eqBands, eqPreset)}
@@ -785,7 +809,7 @@ export default function NowPlayingOverlay() {
                       : 'bg-surface-container-highest text-on-surface-variant'
                   }`}
                 >
-                  {eqEnabled ? 'ON' : 'BYPASS'}
+                  {eqEnabled ? 'Включён' : 'Выключен'}
                 </button>
               </div>
 
@@ -836,11 +860,11 @@ export default function NowPlayingOverlay() {
           </div>
 
           <div className="p-4 rounded-2xl bg-surface-container-high/80   space-y-3 text-xs">
-            <div className="font-bold text-on-surface text-sm">Audio Effects Pipeline</div>
+            <div className="font-bold text-on-surface text-sm">Эффекты</div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <label className="space-y-1">
                 <div className="flex justify-between">
-                  <span className="text-on-surface-variant">Pitch</span>
+                  <span className="text-on-surface-variant">Высота тона</span>
                   <span className="font-bold text-primary">
                     {pitchSemitones > 0 ? `+${pitchSemitones}` : pitchSemitones} st
                   </span>
@@ -857,7 +881,7 @@ export default function NowPlayingOverlay() {
               </label>
               <label className="space-y-1">
                 <div className="flex justify-between">
-                  <span className="text-on-surface-variant">Bass Boost</span>
+                  <span className="text-on-surface-variant">Усиление баса</span>
                   <span className="font-bold text-primary">+{bassBoost} dB</span>
                 </div>
                 <input
@@ -872,7 +896,7 @@ export default function NowPlayingOverlay() {
               </label>
               <label className="space-y-1">
                 <div className="flex justify-between">
-                  <span className="text-on-surface-variant">Stereo Widener</span>
+                  <span className="text-on-surface-variant">Ширина стерео</span>
                   <span className="font-bold text-primary">{Math.round(stereoWidener * 100)}%</span>
                 </div>
                 <input
@@ -888,6 +912,7 @@ export default function NowPlayingOverlay() {
             </div>
             <div className="flex items-center gap-2 pt-1 flex-wrap">
               <button
+                aria-pressed={silenceSkip}
                 onClick={() => setDspOption({ silenceSkip: !silenceSkip })}
                 className={`px-3 py-1.5 rounded-xl font-semibold ${
                   silenceSkip
@@ -895,9 +920,10 @@ export default function NowPlayingOverlay() {
                     : 'bg-surface-container text-on-surface-variant'
                 }`}
               >
-                Skip Silence {silenceSkip ? 'ON' : 'OFF'}
+                Пропуск тишины
               </button>
               <button
+                aria-pressed={audioCompressor}
                 onClick={() => setDspOption({ audioCompressor: !audioCompressor })}
                 className={`px-3 py-1.5 rounded-xl font-semibold ${
                   audioCompressor
@@ -905,7 +931,7 @@ export default function NowPlayingOverlay() {
                     : 'bg-surface-container text-on-surface-variant'
                 }`}
               >
-                Compressor {audioCompressor ? 'ON' : 'OFF'}
+                Компрессор
               </button>
             </div>
           </div>
@@ -926,7 +952,7 @@ export default function NowPlayingOverlay() {
                 className="text-xs text-red-400 hover:text-red-300 flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-red-500/10"
               >
                 <Trash2 size={12} />
-                Clear Queue
+                Очистить очередь
               </button>
             )}
           </div>
@@ -1006,9 +1032,9 @@ export default function NowPlayingOverlay() {
         <div className="flex items-center justify-between pb-3 mb-2   flex-wrap gap-2">
           <div className="flex items-center gap-2">
             <span className="text-xs font-bold text-on-surface uppercase tracking-wider">
-              {variant === 'timecode' ? 'Studio Timecode Lyrics' : 'Lyrics'}
+              Текст песни
             </span>
-            {lyricsSource && lyricsSource !== 'none' && (
+            {lyricsSource && lyricsSource !== 'none' && lyricsSource !== 'Searching 10+ providers...' && (
               <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-primary/15 text-primary">
                 {lyricsSource}
               </span>
@@ -1025,7 +1051,7 @@ export default function NowPlayingOverlay() {
                     : 'bg-surface-container-high text-on-surface-variant'
                 }`}
               >
-                Word-Sync
+                По словам
               </button>
             )}
             <button
@@ -1036,7 +1062,7 @@ export default function NowPlayingOverlay() {
                   : 'bg-surface-container-high text-on-surface-variant'
               }`}
             >
-              Romaji
+              Транслитерация
             </button>
             <button
               onClick={() => setLyricsTranslate(!lyricsTranslate)}
@@ -1047,7 +1073,7 @@ export default function NowPlayingOverlay() {
               }`}
             >
               <Languages size={12} />
-              <span>RU Translate</span>
+              <span>Перевод</span>
             </button>
             <div className="flex items-center gap-1 bg-surface-container-high rounded-lg px-2 py-0.5 text-[11px]">
               <button
@@ -1125,10 +1151,12 @@ export default function NowPlayingOverlay() {
                           : `${fontSizes[lyricsFontSize]} text-on-surface-variant/60 hover:text-on-surface`;
 
               return (
-                <div
+                <button
+                  type="button"
                   key={i}
                   ref={isActive ? activeLyricRef : undefined}
-                  onClick={() => seek(line.time)}
+                  aria-current={isActive ? "true" : undefined}
+                  onClick={() => void seek(Math.max(0, line.time - lyricsOffset / 1000))}
                   style={
                     variant === 'spatial_3d'
                       ? {
@@ -1138,17 +1166,17 @@ export default function NowPlayingOverlay() {
                         }
                       : undefined
                   }
-                  className={`cursor-pointer transition-all duration-300 rounded-2xl px-4 py-2.5 ${variantClasses}`}
+                  className={`block w-full text-left cursor-pointer focus-visible:outline focus-visible:outline-primary transition-all duration-300 rounded-2xl px-4 py-2.5 ${variantClasses}`}
                 >
-                  <div className="flex items-baseline gap-3">
+                  <span className="flex items-baseline gap-3">
                     {variant === 'timecode' && (
                       <span className="text-[11px] font-mono text-cyan-400/80 shrink-0">
                         [{formatTimecode(line.time)}]
                       </span>
                     )}
-                    <div className="flex-1">
+                    <span className="flex-1">
                       {isActive && lyricsWordByWord && line.words && line.words.length > 0 ? (
-                        <div className="flex flex-wrap gap-x-1.5 gap-y-1">
+                        <span className="flex flex-wrap gap-x-1.5 gap-y-1">
                           {line.words.map((w, wIdx) => {
                             const wordActive =
                               effectivePosition >= w.startTime && effectivePosition <= w.endTime;
@@ -1158,7 +1186,7 @@ export default function NowPlayingOverlay() {
                                 key={wIdx}
                                 className={`inline-block transition-all duration-150 ${
                                   wordActive
-                                    ? 'text-primary -translate-y-0.5 drop-shadow-[0_0_12px_rgba(203,185,245,0.85)]'
+                                    ? 'text-primary -translate-y-0.5 drop-shadow-[0_0_12px_var(--md-primary)]'
                                     : wordDone
                                       ? 'text-primary/95'
                                       : 'text-on-surface/45'
@@ -1168,26 +1196,26 @@ export default function NowPlayingOverlay() {
                               </span>
                             );
                           })}
-                        </div>
+                        </span>
                       ) : (
-                        <p className={isActive && variant === 'default' ? 'text-primary' : ''}>
+                        <span className={isActive && variant === 'default' ? 'text-primary' : ''}>
                           {line.text}
-                        </p>
+                        </span>
                       )}
 
                       {lyricsRomanize && line.romanized && (
-                        <p className="text-xs font-medium text-primary/75 mt-1 tracking-wide">
+                        <span className="block text-xs font-medium text-primary/75 mt-1 tracking-wide">
                           {line.romanized}
-                        </p>
+                        </span>
                       )}
                       {lyricsTranslate && line.translation && (
-                        <p className="text-sm font-semibold text-on-surface/80 mt-1 italic">
+                        <span className="block text-sm font-semibold text-on-surface/80 mt-1 italic">
                           {line.translation}
-                        </p>
+                        </span>
                       )}
-                    </div>
-                  </div>
-                </div>
+                    </span>
+                  </span>
+                </button>
               );
             })
           ) : plainLyrics ? (
@@ -1199,8 +1227,8 @@ export default function NowPlayingOverlay() {
               <Layers size={42} className="text-primary/35" />
               <p className="text-sm font-medium">
                 {lyricsSource === 'Searching 10+ providers...'
-                  ? 'Searching YouLyPlus, BetterLyrics, LRCLib, SimpMusic...'
-                  : 'No synchronized lyrics found for this track'}
+                  ? 'Ищем текст песни…'
+                  : 'Текст для этого трека не найден'}
               </p>
             </div>
           )}
@@ -1210,59 +1238,57 @@ export default function NowPlayingOverlay() {
   };
 
   return (
-    <AnimatePresence>
       <motion.div
         key="now-playing"
-        initial={{ opacity: 0, y: 30 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: 30 }}
-        transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+        initial={reducedMotion ? false : { opacity: 0, y: 28, scale: 0.986 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 28, scale: 0.986 }}
+        transition={{ ...panelTransition, opacity: { duration: reducedMotion ? 0 : 0.20 } }}
         className="fixed top-9 left-0 right-0 bottom-0 z-40 flex flex-col bg-surface overflow-hidden select-none"
+        style={{ backgroundColor: 'var(--md-surface)' }}
       >
         {/* Dynamic Background Layer */}
-        {canvasEnabled && canvasData?.videoUrl ? (
+        {ambientBackgroundBlur && (fullscreenCanvas ? (
           <video
-            key={canvasData.videoUrl}
-            src={canvasData.videoUrl}
+            key={fullscreenCanvas}
+            src={fullscreenCanvas}
             autoPlay
             loop
             muted
             playsInline
-            className={`absolute inset-0 w-full h-full object-cover pointer-events-none transition-all duration-700 ${
-              playerStyle === 'v8_immersive'
-                ? 'opacity-85 scale-100 blur-none'
-                : 'opacity-30 scale-125 blur-2xl'
-            }`}
+            className="absolute inset-0 w-full h-full object-cover pointer-events-none opacity-85"
           />
         ) : (
-          currentTrack.thumbnail && (
-            <div
-              className={`absolute inset-0 bg-cover bg-center pointer-events-none transition-all duration-700 ${
-                playerStyle === 'v8_immersive'
-                  ? 'opacity-75 scale-105 blur-md'
-                  : playerStyle === 'flamingo'
-                    ? 'opacity-45 scale-125 blur-3xl saturate-200'
-                    : 'opacity-25 scale-125 blur-3xl'
-              }`}
-              style={{ backgroundImage: `url(${currentTrack.thumbnail})` }}
-            />
-          )
-        )}
+          <AnimatePresence initial={false}>
+            {currentTrack.thumbnail && (
+              <motion.div
+                key={currentTrack.thumbnail}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: playerStyle === 'v8_immersive' ? 0.75 : playerStyle === 'flamingo' ? 0.45 : 0.25 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: reducedMotion ? 0 : 0.65, ease: 'easeInOut' }}
+                className={`absolute inset-0 bg-cover bg-center pointer-events-none ${
+                  playerStyle === 'v8_immersive' ? 'scale-105 blur-md'
+                    : playerStyle === 'flamingo' ? 'scale-125 blur-3xl saturate-200' : 'scale-125 blur-3xl'
+                }`}
+                style={{ backgroundImage: `url(${currentTrack.thumbnail})` }}
+              />
+            )}
+          </AnimatePresence>
+        ))}
         <div
-          className={`absolute inset-0 pointer-events-none transition-all duration-700 ${
+          className={`absolute inset-0 pointer-events-none ${
             playerStyle === 'v8_immersive'
               ? 'bg-gradient-to-b from-black/30 via-black/55 to-black/95'
               : playerStyle === 'bitchord'
                 ? 'bg-[#090a0f]/95'
-                : 'bg-gradient-to-b from-surface/65 via-surface/75 to-surface/95'
+                : ambientBackgroundBlur ? 'bg-gradient-to-b from-surface/30 via-surface/45 to-surface/75'
+                  : 'bg-gradient-to-b from-surface/65 via-surface/75 to-surface/95'
           }`}
-          style={{
-            backgroundImage:
-              playerStyle !== 'bitchord'
-                ? `radial-gradient(circle at 18% 45%, var(--player-glow-accent, rgba(203,185,245,0.22)) 0%, transparent 60%), radial-gradient(circle at 82% 25%, var(--player-bg-tint, rgba(203,185,245,0.12)) 0%, transparent 55%)`
-                : undefined,
-          }}
         />
+        {ambientBackgroundBlur && playerStyle !== 'bitchord' && (
+          <div className="player-ambient ambient-breath" data-playing={isPlaying} aria-hidden="true" />
+        )}
 
         {/* Top Header Bar: ONLY ONE Collapse Button on Left + 8 Style Switcher in Center + Tools on Right */}
         <div className="relative z-20 flex-shrink-0 flex items-center justify-between px-6 pt-3 pb-2 gap-3 flex-wrap   bg-surface-container/60 backdrop-blur-xl">
@@ -1278,7 +1304,7 @@ export default function NowPlayingOverlay() {
             <button
               onClick={() => setSourceSwitcherTrack(currentTrack)}
               className="text-[11px] font-bold text-primary uppercase tracking-widest px-2.5 py-1 rounded-full bg-primary/15   hover:bg-primary/25 transition inline-flex items-center gap-1.5"
-              title="Нажмите, чтобы переключить источник (Tidal / Qobuz / Deezer / YTM)"
+              title="Выбрать источник звука"
             >
               <ArrowLeftRight size={11} />
               {resolvedSourceBadge || currentTrack.source.toUpperCase()}
@@ -1286,16 +1312,16 @@ export default function NowPlayingOverlay() {
             <button
               onClick={() => setAuditTarget({ track: currentTrack, urlOrPath: currentTrack.path })}
               className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-surface-container-high/80 text-on-surface-variant hover:text-primary   transition inline-flex items-center gap-1"
-              title="Спектральный аудит качества (FFT 4096)"
+              title="Спектр звука"
             >
               <Activity size={11} />
-              Audit
+              Спектр
             </button>
 
             {automixing && (
               <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300   animate-pulse flex items-center gap-1">
                 <Disc3 size={12} className="animate-spin" />
-                SMART DJ AUTOMIX
+                Переход между треками
               </span>
             )}
 
@@ -1314,6 +1340,7 @@ export default function NowPlayingOverlay() {
               return (
                 <button
                   key={st.id}
+                  aria-pressed={active}
                   onClick={() => setPlayerStyle(st.id)}
                   className={`px-3 py-1 rounded-full text-xs font-semibold transition-all whitespace-nowrap ${
                     active
@@ -1336,24 +1363,25 @@ export default function NowPlayingOverlay() {
                   ? 'bg-primary/20 text-primary  '
                   : 'bg-surface-container-high text-on-surface-variant hover:text-on-surface'
               }`}
-              title="DSP Equalizer & Smart DJ Automix"
+              title="Эквалайзер и переходы"
             >
               <Sliders size={14} />
-              <span>DSP / EQ</span>
+              <span>Звук</span>
             </button>
 
             {lyrics.length > 0 && (
               <button
                 onClick={() => setShowShareModal(true)}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-surface-container-high text-on-surface-variant hover:text-on-surface transition-colors"
-                title="Create Lyrics Share Card"
+                title="Создать карточку с текстом"
               >
                 <Share2 size={14} />
-                <span>Share Card</span>
+                <span>Поделиться</span>
               </button>
             )}
 
             <button
+              aria-expanded={showQueue}
               onClick={() => setShowQueue((v) => !v)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
                 showQueue
@@ -1362,7 +1390,7 @@ export default function NowPlayingOverlay() {
               }`}
             >
               <List size={14} />
-              <span>Queue ({queue.length})</span>
+              <span>Очередь ({queue.length})</span>
             </button>
           </div>
         </div>
@@ -1387,7 +1415,8 @@ export default function NowPlayingOverlay() {
                   </p>
                   <motion.p
                     key={activeIndex}
-                    initial={{ opacity: 0, y: 12, scale: 0.96 }}
+                    initial={reducedMotion ? false : { opacity: 0, y: 12, scale: 0.96 }}
+                    transition={controlTransition}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     className="text-3xl md:text-5xl font-black text-white drop-shadow-[0_4px_30px_rgba(0,0,0,0.9)] leading-tight"
                   >
@@ -1443,7 +1472,7 @@ export default function NowPlayingOverlay() {
                   </button>
                 </div>
               </div>
-              {renderSeekSlider('accent-white h-2')}
+              {renderSeekSlider('text-white')}
               <div className="flex items-center justify-between flex-wrap gap-2">
                 {renderSecondaryPills()}
                 <AudioVisualizer height={28} className="w-48 opacity-85" />
@@ -1462,9 +1491,10 @@ export default function NowPlayingOverlay() {
 
               <motion.div
                 animate={{
-                  scale: coverCompressed ? 0.9 : 1,
+                  scale: !reducedMotion && coverCompressed ? 0.9 : 1,
                   borderRadius: isPlaying ? '48px' : '64px',
                 }}
+                transition={panelTransition}
                 className="w-64 h-64 overflow-hidden shadow-2xl ring-4 ring-primary/35 relative"
               >
                 {renderArtworkMedia()}
@@ -1497,7 +1527,7 @@ export default function NowPlayingOverlay() {
                 </div>
               )}
 
-              <div className="w-full">{renderSeekSlider('accent-primary h-3')}</div>
+              <div className="w-full">{renderSeekSlider('text-primary seek-bar-wide')}</div>
 
               {/* Expressive Oversized Pill Buttons */}
               <div className="flex items-center gap-3">
@@ -1517,10 +1547,14 @@ export default function NowPlayingOverlay() {
                 </button>
                 <button
                   onClick={() => (isPlaying ? pause() : resume())}
-                  className="px-10 py-4 rounded-[28px] bg-primary text-on-primary font-black text-sm flex items-center gap-2 shadow-xl shadow-primary/30"
+                  disabled={loading}
+                  aria-busy={loading}
+                  className="playback-trigger px-10 py-4 rounded-[28px] bg-primary text-on-primary font-black text-sm flex items-center gap-2 shadow-xl shadow-primary/30"
                 >
-                  {isPlaying ? <Pause size={26} /> : <Play size={26} fill="currentColor" />}
-                  <span>{isPlaying ? 'ПАУЗА' : 'ИГРАТЬ'}</span>
+                  <PlaybackPulse />
+                  {loading ? <span className="w-6 h-6 rounded-full border-2 border-current border-t-transparent animate-spin playback-spinner" />
+                    : isPlaying ? <Pause size={26} /> : <Play size={26} fill="currentColor" />}
+                  <span>{loading ? 'Запуск…' : isPlaying ? 'Пауза' : 'Воспроизвести'}</span>
                 </button>
                 <button
                   onClick={handleInstantNext}
@@ -1609,7 +1643,7 @@ export default function NowPlayingOverlay() {
                   </button>
                 </div>
 
-                {renderSeekSlider('accent-cyan-400 h-2')}
+                {renderSeekSlider('text-cyan-400')}
                 <div className="flex justify-center">
                   {renderTransportControls('w-14 h-14', 'bg-cyan-400 text-black')}
                 </div>
@@ -1654,7 +1688,7 @@ export default function NowPlayingOverlay() {
                 </div>
 
                 <div className="space-y-3 pt-2">
-                  {renderSeekSlider('accent-emerald-400 h-2')}
+                  {renderSeekSlider('text-emerald-400')}
                   <div className="flex justify-center">
                     {renderTransportControls('w-14 h-14', 'bg-emerald-400 text-black')}
                   </div>
@@ -1678,11 +1712,11 @@ export default function NowPlayingOverlay() {
               <div style={{ perspective: '1100px' }} className="relative py-2">
                 <motion.div
                   animate={{
-                    rotateY: isPlaying ? 16 : 6,
-                    rotateX: isPlaying ? -6 : 0,
-                    scale: coverCompressed ? 0.88 : 1.02,
+                    rotateY: reducedMotion ? 0 : isPlaying ? 16 : 6,
+                    rotateX: !reducedMotion && isPlaying ? -6 : 0,
+                    scale: reducedMotion ? 1 : coverCompressed ? 0.88 : 1.02,
                   }}
-                  transition={{ type: 'spring', stiffness: 180, damping: 20 }}
+                  transition={panelTransition}
                   className="w-72 h-72 rounded-[30px] overflow-hidden shadow-[0_30px_70px_rgba(0,0,0,0.75)]   relative"
                 >
                   {renderArtworkMedia()}
@@ -1769,7 +1803,7 @@ export default function NowPlayingOverlay() {
                   <p className="text-sm font-black text-white">@{currentTrack.artist}</p>
                   <h2 className="text-lg font-bold text-white truncate">{currentTrack.title}</h2>
                 </div>
-                {renderSeekSlider('accent-pink-500 h-1.5')}
+                {renderSeekSlider('text-pink-500 seek-bar-compact')}
                 <div className="flex justify-center">
                   {renderTransportControls('w-12 h-12', 'bg-pink-500 text-white')}
                 </div>
@@ -1783,28 +1817,28 @@ export default function NowPlayingOverlay() {
                 className={`w-12 h-12 rounded-full flex flex-col items-center justify-center transition ${
                   liked ? 'bg-pink-500 text-white' : 'bg-surface-container-highest text-on-surface'
                 }`}
-                title="Like"
+                title="Добавить в любимые"
               >
                 <Heart size={20} fill={liked ? 'currentColor' : 'none'} />
               </button>
               <button
                 onClick={() => setSourceSwitcherTrack(currentTrack)}
                 className="w-12 h-12 rounded-full bg-surface-container-highest hover:bg-primary hover:text-on-primary flex items-center justify-center"
-                title="Switch Audio Source"
+                title="Выбрать источник звука"
               >
                 <ArrowLeftRight size={18} />
               </button>
               <button
                 onClick={() => setShowShareModal(true)}
                 className="w-12 h-12 rounded-full bg-surface-container-highest hover:bg-primary hover:text-on-primary flex items-center justify-center"
-                title="Share Lyrics Card"
+                title="Создать карточку с текстом"
               >
                 <Share2 size={18} />
               </button>
               <button
                 onClick={handleDownload}
                 className="w-12 h-12 rounded-full bg-surface-container-highest hover:bg-primary hover:text-on-primary flex items-center justify-center"
-                title="Save Offline"
+                title="Скачать для прослушивания без интернета"
               >
                 <Download size={18} />
               </button>
@@ -1841,10 +1875,10 @@ export default function NowPlayingOverlay() {
 
                 <motion.div
                   animate={{
-                    scale: coverCompressed ? 0.85 : 1.0,
+                    scale: !reducedMotion && coverCompressed ? 0.85 : 1,
                     borderRadius: coverCompressed ? '36px' : '24px',
                   }}
-                  transition={{ type: 'spring', stiffness: 320, damping: 24 }}
+                  transition={panelTransition}
                   className="relative z-10 w-72 h-72 overflow-hidden shadow-2xl  "
                 >
                   {renderArtworkMedia()}
@@ -1863,7 +1897,8 @@ export default function NowPlayingOverlay() {
                   </p>
                 </div>
                 <motion.button
-                  whileTap={{ scale: 0.75 }}
+                  whileTap={press}
+                  transition={controlTransition}
                   onClick={() => toggleLikeCurrent(currentTrack)}
                   className={`p-2.5 rounded-full transition-colors ${
                     liked
@@ -1880,7 +1915,9 @@ export default function NowPlayingOverlay() {
               {renderSecondaryPills()}
 
               {downloadMsg && downloadState !== 'idle' && (
-                <p className="text-[11px] text-primary/90 font-medium">{downloadMsg}</p>
+                <p className="text-[11px] text-primary/90 font-medium truncate max-w-md" title={downloadMsg}>
+                  {downloadMsg}
+                </p>
               )}
 
               <AudioVisualizer height={38} className="mt-1 opacity-85" />
@@ -1892,15 +1929,15 @@ export default function NowPlayingOverlay() {
           </div>
         )}
 
-        {/* Lyrics Share Card Creator Modal */}
+        {/* Lyrics share card dialog */}
         {showShareModal && (
           <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-6">
             <div className="bg-surface-container-high   rounded-3xl max-w-lg w-full p-6 space-y-5 shadow-2xl">
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="text-lg font-bold text-on-surface">Lyrics Share Card Creator</h3>
+                  <h3 className="text-lg font-bold text-on-surface">Карточка с текстом</h3>
                   <p className="text-xs text-on-surface-variant">
-                    Select up to 4 lyric lines to export as an aesthetic PNG card
+                    Выберите до четырёх строк для карточки.
                   </p>
                 </div>
                 <button
@@ -1941,19 +1978,19 @@ export default function NowPlayingOverlay() {
                   onClick={() => setShowShareModal(false)}
                   className="px-4 py-2 rounded-xl text-xs font-semibold bg-surface-container text-on-surface-variant"
                 >
-                  Cancel
+                  Отмена
                 </button>
                 <button
                   onClick={exportLyricsShareCardPng}
                   className="px-5 py-2 rounded-xl text-xs font-bold bg-primary text-on-primary shadow-lg shadow-primary/25"
                 >
-                  Export PNG Card (1080×1350)
+                  Скачать PNG
                 </button>
               </div>
             </div>
           </div>
         )}
       </motion.div>
-    </AnimatePresence>
+
   );
 }

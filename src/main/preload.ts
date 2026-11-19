@@ -13,19 +13,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
   close: () => ipcRenderer.send('window:close'),
   toggleMiniMode: () => ipcRenderer.invoke('window:toggleMiniMode'),
   onMiniModeChanged: (cb: (isMini: boolean) => void) => subscribe<boolean>('window:miniModeChanged', cb),
-  onMediaShortcut: (cb: (action: 'playPause' | 'next' | 'prev') => void) =>
-    subscribe<'playPause' | 'next' | 'prev'>('shortcut:media', cb),
+  onMediaShortcut: (cb: (action: 'playPause' | 'play' | 'pause' | 'next' | 'prev') => void) =>
+    subscribe<'playPause' | 'play' | 'pause' | 'next' | 'prev'>('shortcut:media', cb),
   updateDiscordPresence: (trackInfo: unknown) =>
     ipcRenderer.invoke('desktop:updatePresence', trackInfo),
 
+  onMediaSeek: (cb: (event: { position?: number; offset?: number }) => void) => subscribe('shortcut:seek', cb),
   desktop: {
+    updatePlaybackMode: (mode: unknown) => ipcRenderer.send('desktop:updatePlaybackMode', mode),
+    onPlaybackMode: (cb: (mode: unknown) => void) => subscribe('desktop:playbackMode', cb),
+    updateLyrics: (trackId: string, lines: unknown[]) => ipcRenderer.send('desktop:updateLyrics', trackId, lines),
+    updatePosition: (position: number, seeked = false) => ipcRenderer.send('desktop:updatePosition', position, seeked),
     updatePresence: (trackInfo: unknown) => ipcRenderer.invoke('desktop:updatePresence', trackInfo),
     listenBrainzNowPlaying: (trackInfo: unknown) =>
       ipcRenderer.invoke('desktop:listenBrainzNowPlaying', trackInfo),
     listenBrainzScrobble: (trackInfo: unknown) =>
       ipcRenderer.invoke('desktop:listenBrainzScrobble', trackInfo),
     toggleLocalApi: (enabled: boolean) => ipcRenderer.invoke('desktop:toggleLocalApi', enabled),
-    extractPalette: (imageUrl: string) => ipcRenderer.invoke('desktop:extractPalette', imageUrl),
+    readArtworkThumbnail: (imageUrl: string) => ipcRenderer.invoke('desktop:readArtworkThumbnail', imageUrl),
   },
 
   // Persistent Database, Stats & Settings
@@ -97,7 +102,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('player:ended', listener);
       return () => ipcRenderer.removeListener('player:ended', listener);
     },
-    onAutomixTransition: (cb: (info: { nextTrackId: string }) => void) =>
+    onAutomixTransition: (cb: (info: { nextTrackId: string; spotifyId?: string }) => void) =>
       subscribe<{ nextTrackId: string }>('player:automixTransition', cb),
     onAutomixPlan: (cb: (plan: any) => void) => subscribe('player:automixPlan', cb),
     onSmartToast: (cb: (toast: { message: string; kind: string; timestamp: number }) => void) =>
@@ -200,6 +205,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       album?: string;
       duration?: number;
     }) => ipcRenderer.invoke('spotify:resolveTrack', track),
+    getPersonalizedHome: (forceRefresh?: boolean) =>
+      ipcRenderer.invoke('spotify:getPersonalizedHome', forceRefresh),
   },
 
   // YouTube & YouTube Music Account Sync
@@ -252,8 +259,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Multi-Provider Lyrics & Motion Canvas
   lyrics: {
-    get: (title: string, artist: string, duration: number, videoId?: string) =>
-      ipcRenderer.invoke('lyrics:get', title, artist, duration, videoId),
+    get: (title: string, artist: string, duration: number, trackId?: string, spotifyId?: string) =>
+      ipcRenderer.invoke('lyrics:get', title, artist, duration, trackId, spotifyId),
     searchCandidates: (query: string) => ipcRenderer.invoke('lyrics:searchCandidates', query),
   },
   canvas: {

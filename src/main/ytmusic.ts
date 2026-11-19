@@ -13,6 +13,7 @@ import { ipcMain, app } from 'electron';
 import { execFile } from 'child_process';
 import path from 'path';
 import https from 'https';
+import { setTimeout as delay } from 'node:timers/promises';
 import type { Innertube } from 'youtubei.js';
 import {
   buildAuthenticatedInnerTubeHeaders,
@@ -54,7 +55,6 @@ export interface YTMusicSearchAllResult {
 }
 
 const INNERTUBE_SEARCH_URL = 'https://music.youtube.com/youtubei/v1/search?prettyPrint=false';
-const INNERTUBE_NEXT_URL = 'https://music.youtube.com/youtubei/v1/next?prettyPrint=false';
 const INNERTUBE_SUGGEST_URL = 'https://music.youtube.com/youtubei/v1/music/get_search_suggestions?prettyPrint=false';
 
 const INNERTUBE_CONTEXT = {
@@ -134,12 +134,24 @@ function postInnerTube<T = any>(url: string, body: Record<string, unknown>, time
 }
 
 function parseDurationText(text?: string): number {
-  if (!text) return 0;
-  const parts = text.trim().split(':').map((p) => parseInt(p, 10));
-  if (parts.some(isNaN)) return 0;
+  if (!text || !/^\d+(?::[0-5]\d){1,2}$/.test(text.trim())) return 0;
+  const parts = text.trim().split(':').map(Number);
   if (parts.length === 2) return parts[0] * 60 + parts[1];
   if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
   return 0;
+}
+
+// Old home cards stored their entire subtitle in the artist field.
+const YOUTUBE_ITEM_LABEL = /^(?:song|track|video|композиция|песня|трек|видео|клип)$/iu;
+
+export function youtubeArtistName(value: string): string {
+  const parts = value.split('•').map(part => part.trim()).filter(Boolean);
+  if (YOUTUBE_ITEM_LABEL.test(parts[0] || '')) parts.shift();
+  return (parts[0] || '').replace(/\s+[-–—]\s+Topic$/i, '');
+}
+
+function readMusicSubtitle(runs: Array<{ text: string }>): string[] {
+  return runs.map(run => run.text).join('').split('•').map(part => part.trim()).filter(Boolean);
 }
 
 function bestThumb(thumbs: any): string {
@@ -178,10 +190,21 @@ function extractMusicResponsiveListItem(item: any): YTMusicTrack | null {
       duration = parseDurationText(r.text);
     }
   }
+  if (!duration) {
+    for (const column of renderer.fixedColumns || []) {
+      const text = column?.musicResponsiveListItemFixedColumnRenderer?.text;
+      const value = text?.simpleText || text?.runs?.map((r: any) => r.text).join('');
+      if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(String(value || '').trim())) {
+        duration = parseDurationText(value);
+        break;
+      }
+    }
+  }
   if (!artist) {
-    const cleanRuns = subRuns.map((r: any) => r.text).filter((t: string) => t !== ' • ' && !/^\d+:\d+$/.test(t));
-    artist = cleanRuns[0] || 'YouTube Music';
-    if (!album && cleanRuns[1]) album = cleanRuns[1];
+    const subtitle = readMusicSubtitle(subRuns);
+    if (YOUTUBE_ITEM_LABEL.test(subtitle[0] || '')) subtitle.shift();
+    artist = youtubeArtistName(subtitle[0] || '') || 'YouTube Music';
+    if (!album && subtitle[1] && !parseDurationText(subtitle[1])) album = subtitle[1];
   }
 
   return {
@@ -234,15 +257,15 @@ function extractTwoRowOrListEntity(item: any, fallbackType: YTMusicEntity['type'
   };
 }
 
-export async function ytmusicSearchSongs(query: string, limit = 20): Promise<YTMusicTrack[]> {
+async function ytmusicSearchFiltered(query: string, limit: number, filter: 'songs' | 'videos'): Promise<YTMusicTrack[]> {
   if (!query.trim()) return [];
-  const cacheKey = `${query.trim().toLowerCase()}:${limit}`;
+  const cacheKey = `${filter}:${query.trim().toLowerCase()}:${limit}`;
   const hit = searchSongsCache.get(cacheKey);
   if (hit && hit.expiresAt > Date.now()) {
     return hit.results;
   }
 
-  const data = await postInnerTube<any>(INNERTUBE_SEARCH_URL, { query, params: 'EgWKAQIIAWoKEAMQBBAJEAoQBQ%3D%3D' });
+  const data = await postInnerTube<any>(INNERTUBE_SEARCH_URL, { query, params: filter === 'videos' ? 'EgWKAQIQAWoKEAMQBBAJEAoQBQ%3D%3D' : 'EgWKAQIIAWoKEAMQBBAJEAoQBQ%3D%3D' });
   const tabs = data?.contents?.tabbedSearchResultsRenderer?.tabs;
   const sections = tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
   const songs: YTMusicTrack[] = [];
@@ -264,11 +287,18 @@ export async function ytmusicSearchSongs(query: string, limit = 20): Promise<YTM
   return songs;
 }
 
+export async function ytmusicSearchSongs(query: string, limit = 20): Promise<YTMusicTrack[]> {
+  return ytmusicSearchFiltered(query, limit, 'songs');
+}
+
 export async function ytmusicSearchAll(query: string): Promise<YTMusicSearchAllResult> {
   const empty: YTMusicSearchAllResult = { songs: [], albums: [], artists: [], playlists: [] };
   if (!query.trim()) return empty;
 
-  const data = await postInnerTube<any>(INNERTUBE_SEARCH_URL, { query });
+  const [data, videos] = await Promise.all([
+    postInnerTube<any>(INNERTUBE_SEARCH_URL, { query }),
+    ytmusicSearchFiltered(query, 24, 'videos').catch(() => []),
+  ]);
   const tabs = data?.contents?.tabbedSearchResultsRenderer?.tabs;
   const sections = tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
 
@@ -304,21 +334,55 @@ export async function ytmusicSearchAll(query: string): Promise<YTMusicSearchAllR
   if (empty.songs.length === 0) {
     empty.songs = await ytmusicSearchSongs(query, 15);
   }
+  const seen = new Set(empty.songs.map((song) => song.id));
+  for (const video of videos) {
+    if (!seen.has(video.id)) { empty.songs.push(video); seen.add(video.id); }
+  }
   return empty;
+}
+
+const watchNextRequests = new Map<string, Promise<any[]>>();
+const trackDurations = new Map<string, number>();
+
+function rememberTrackDuration(videoId: string, duration: number): number {
+  if (!Number.isFinite(duration) || duration <= 0) return 0;
+  if (trackDurations.size >= 256) trackDurations.delete(trackDurations.keys().next().value!);
+  trackDurations.set(videoId, duration);
+  return duration;
+}
+
+function getWatchNextTracks(videoId: string): Promise<any[]> {
+  const account = getActiveYouTubeAccount();
+  const key = `${account?.id || 'anonymous'}:${videoId}`;
+  const pending = watchNextRequests.get(key);
+  if (pending) return pending;
+  const task = innerTubePost<any>('next', {
+    videoId,
+    playlistId: `RDAMVM${videoId}`,
+    isAudioOnly: true,
+  }, account).then(data => {
+    const tracks = walkAnyRenderers(data?.contents, 'playlistPanelVideoRenderer');
+    const exact = tracks.find(item => item.videoId === videoId);
+    rememberTrackDuration(videoId, parseDurationText(exact?.lengthText?.simpleText || exact?.lengthText?.runs?.[0]?.text));
+    return tracks;
+  }).catch(() => []).finally(() => watchNextRequests.delete(key));
+  watchNextRequests.set(key, task);
+  return task;
+}
+
+export async function ytmusicGetTrackDuration(videoId: string): Promise<number> {
+  if (!/^[\w-]{11}$/.test(videoId)) return 0;
+  const known = trackDurations.get(videoId);
+  if (known) return known;
+  await Promise.race([getWatchNextTracks(videoId), delay(3200, undefined, { ref: false })]);
+  return trackDurations.get(videoId) || 0;
 }
 
 export async function ytmusicGetSuggested(videoId: string): Promise<YTMusicTrack[]> {
   if (!videoId) return [];
-  const data = await postInnerTube<any>(INNERTUBE_NEXT_URL, {
-    videoId,
-    playlistId: `RDAMVM${videoId}`,
-    isAudioOnly: true,
-  });
-  const contents =
-    data?.contents?.singleColumnMusicWatchNextResultsRenderer?.tabbedRenderer?.watchNextTabbedResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.musicQueueRenderer?.content?.playlistPanelRenderer?.contents || [];
+  const results = await getWatchNextTracks(videoId);
   const tracks: YTMusicTrack[] = [];
-  for (const item of contents) {
-    const r = item?.playlistPanelVideoRenderer;
+  for (const r of results) {
     if (!r?.videoId || r.videoId === videoId) continue;
     tracks.push({
       id: r.videoId,
@@ -599,7 +663,7 @@ export async function ytmusicGetExplore() {
 
 const pendingStreams = new Map<string, Promise<string | null>>();
 
-function fetchDirectInnerTubeStream(videoId: string): Promise<string | null> {
+function fetchDirectInnerTubeStream(videoId: string, signal: AbortSignal): Promise<string | null> {
   return new Promise((resolve) => {
     const postData = JSON.stringify({
       videoId,
@@ -629,14 +693,17 @@ function fetchDirectInnerTubeStream(videoId: string): Promise<string | null> {
           'X-YouTube-Client-Version': '1.61.48',
           'Content-Length': Buffer.byteLength(postData),
         },
+        signal,
         timeout: 4000,
       },
       (res) => {
         let body = '';
+        res.on('error', () => resolve(null));
         res.on('data', (chunk) => { body += chunk; });
         res.on('end', () => {
           try {
             const data = JSON.parse(body);
+            rememberTrackDuration(videoId, Number(data.videoDetails?.lengthSeconds));
             if (data.playabilityStatus?.status !== 'OK') return resolve(null);
             const formats = (data.streamingData?.adaptiveFormats || []).filter(
               (f: any) => f.mimeType && f.mimeType.includes('audio/') && f.url
@@ -659,7 +726,7 @@ function fetchDirectInnerTubeStream(videoId: string): Promise<string | null> {
   });
 }
 
-function extractStreamCandidates(videoId: string): Promise<string[]> {
+function extractStreamCandidates(videoId: string, signal: AbortSignal, fast: boolean): Promise<string[]> {
   return new Promise((resolve) => {
     let cacheDir: string;
     try {
@@ -667,11 +734,19 @@ function extractStreamCandidates(videoId: string): Promise<string[]> {
     } catch {
       cacheDir = '/tmp/archivetune-ytdlp-cache';
     }
-    execFile('yt-dlp', ['--cache-dir', cacheDir, '-J', '--no-playlist', `https://www.youtube.com/watch?v=${videoId}`],
-      { timeout: 20000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+    // Playback consumes direct HTTPS audio formats only.
+    execFile('yt-dlp', [
+      '--cache-dir', cacheDir, '-J', '--no-playlist',
+      '--extractor-args', fast
+        ? 'youtube:player_client=visionos;skip=hls,dash'
+        : 'youtube:skip=hls,dash',
+      `https://www.youtube.com/watch?v=${videoId}`,
+    ],
+      { signal, timeout: fast ? 5500 : 20000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
         if (err || !stdout) return resolve([]);
         try {
           const info = JSON.parse(stdout);
+          rememberTrackDuration(videoId, Number(info.duration));
           const formats = (info.formats || []).filter((f: any) =>
             f.vcodec === 'none' && f.acodec !== 'none' && f.protocol === 'https' && f.url);
           formats.sort((a: any, b: any) => (b.abr || b.tbr || 0) - (a.abr || a.tbr || 0));
@@ -681,54 +756,77 @@ function extractStreamCandidates(videoId: string): Promise<string[]> {
   });
 }
 
-function isStreamAccessible(url: string): Promise<boolean> {
+function isStreamAccessible(url: string, signal: AbortSignal, redirects = 2): Promise<boolean> {
+  const probeSignal = redirects === 2 ? AbortSignal.any([signal, AbortSignal.timeout(2500)]) : signal;
   return new Promise((resolve) => {
-    const req = https.get(url, { headers: { Range: 'bytes=0-0' } }, (res) => {
-      const ok = res.statusCode === 200 || res.statusCode === 206;
+    const req = https.get(url, { signal: probeSignal, headers: { Range: 'bytes=0-0' } }, (res) => {
+      const { statusCode = 0, headers } = res;
       res.destroy();
-      resolve(ok);
+      if (redirects > 0 && statusCode >= 300 && statusCode < 400 && headers.location) {
+        try {
+          const target = new URL(headers.location, url);
+          if (target.protocol === 'https:' && target.hostname.endsWith('.googlevideo.com')) {
+            resolve(isStreamAccessible(target.href, probeSignal, redirects - 1));
+            return;
+          }
+        } catch { /* malformed redirect */ }
+      }
+      resolve(statusCode === 200 || statusCode === 206);
     });
-    req.setTimeout(2500, () => { req.destroy(); resolve(false); });
     req.on('error', () => resolve(false));
   });
 }
 
+async function resolveExtractedStream(videoId: string, signal: AbortSignal, fast: boolean): Promise<string | null> {
+  const candidates = await extractStreamCandidates(videoId, signal, fast);
+  for (let i = 0; i < candidates.length && !signal.aborted; i += 4) {
+    const batch = candidates.slice(i, i + 4);
+    const url = await firstAvailable(batch.map(async (candidate, index) => {
+      // Give the highest-quality format a head start without waiting on a slow CDN.
+      if (index > 0) await delay(120, undefined, { signal });
+      return await isStreamAccessible(candidate, signal) ? candidate : null;
+    }));
+    if (url) return url;
+  }
+  return null;
+}
+
+function firstAvailable(attempts: Promise<string | null>[]): Promise<string | null> {
+  return Promise.any(attempts.map(async attempt => {
+    const url = await attempt;
+    if (url) return url;
+    throw new Error('Stream unavailable');
+  })).catch(() => null);
+}
+
 export function ytmusicGetStreamUrl(videoId: string): Promise<string | null> {
-  if (!videoId) return Promise.resolve(null);
+  if (!/^[\w-]{11}$/.test(videoId)) return Promise.resolve(null);
   const cached = streamUrlCache.get(videoId);
   if (cached && cached.expiresAt > Date.now()) return Promise.resolve(cached.url);
   const pending = pendingStreams.get(videoId);
   if (pending) return pending;
   const task = (async () => {
-    // 1. Ultra-fast direct InnerTube probe (~150-200ms vs 2.2s yt-dlp)
-    const directFast = await fetchDirectInnerTubeStream(videoId);
-    if (directFast) {
-      if (streamUrlCache.size >= 150) streamUrlCache.delete(streamUrlCache.keys().next().value!);
-      streamUrlCache.set(videoId, { url: directFast, expiresAt: Date.now() + 20 * 60 * 1000 });
-      return directFast;
-    }
-
-    // 2. Secondary fallback via yt-dlp with caching
-    const candidates = await extractStreamCandidates(videoId);
-    let url: string | null = null;
-    if (candidates.length > 0) {
-      // First candidate is already highest bitrate format
-      const firstAccessible = await isStreamAccessible(candidates[0]);
-      if (firstAccessible) {
-        url = candidates[0];
-      } else {
-        for (let i = 1; i < candidates.length && !url; i += 4) {
-          const batch = candidates.slice(i, i + 4);
-          const available = await Promise.all(batch.map(isStreamAccessible));
-          url = batch.find((_, index) => available[index]) || null;
-        }
+    const controller = new AbortController();
+    const { signal } = controller;
+    try {
+      const direct = fetchDirectInnerTubeStream(videoId, signal)
+        .then(url => url && isStreamAccessible(url, signal).then(ok => ok ? url : null))
+        .catch(() => null);
+      // Most tracks need only the direct lookup or the single-client extractor.
+      const fast = Promise.race([direct, delay(200, null, { signal })])
+        .then(url => url ?? resolveExtractedStream(videoId, signal, true))
+        .catch(() => null);
+      const fallback = Promise.race([fast, delay(1800, null, { signal })])
+        .then(url => !signal.aborted && !url ? resolveExtractedStream(videoId, signal, false) : url);
+      const url = await firstAvailable([direct, fast, fallback]);
+      if (url) {
+        if (streamUrlCache.size >= 150) streamUrlCache.delete(streamUrlCache.keys().next().value!);
+        streamUrlCache.set(videoId, { url, expiresAt: Date.now() + 20 * 60 * 1000 });
       }
+      return url;
+    } finally {
+      controller.abort();
     }
-    if (url) {
-      if (streamUrlCache.size >= 150) streamUrlCache.delete(streamUrlCache.keys().next().value!);
-      streamUrlCache.set(videoId, { url, expiresAt: Date.now() + 20 * 60 * 1000 });
-    }
-    return url;
   })().finally(() => pendingStreams.delete(videoId));
   pendingStreams.set(videoId, task);
   return task;
@@ -827,7 +925,7 @@ function shuffleCopy<T>(arr: T[]): T[] {
 let homeFeedCache: { key: string; data: any; fetchedAt: number } | null = null;
 
 export async function ytmusicGetPersonalizedHome(chipParams?: string, forceRefresh = false) {
-  const cacheKey = chipParams || 'default';
+  const cacheKey = `${getActiveYouTubeAccount()?.id || 'anonymous'}:${chipParams || 'default'}`;
   if (
     !forceRefresh &&
     homeFeedCache &&
@@ -878,10 +976,19 @@ export async function ytmusicGetPersonalizedHome(chipParams?: string, forceRefre
   }> = [];
 
   const parseHomeShelves = (jsonNode: any) => {
-    const shelves = walkAnyRenderers(jsonNode, 'musicCarouselShelfRenderer');
+    const shelves: any[] = [];
+    const collectShelves = (node: any): void => {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) { node.forEach(collectShelves); return; }
+      for (const [key, value] of Object.entries(node)) {
+        if (key === 'musicCarouselShelfRenderer' || key === 'musicShelfRenderer') shelves.push(value);
+        collectShelves(value);
+      }
+    };
+    collectShelves(jsonNode);
     for (const s of shelves) {
       const title =
-        (s.header?.musicCarouselShelfBasicHeaderRenderer?.title?.runs || [])
+        (s.header?.musicCarouselShelfBasicHeaderRenderer?.title?.runs || s.title?.runs || [])
           .map((r: any) => r.text)
           .join('')
           .trim() || 'Рекомендации YouTube Music';
@@ -927,9 +1034,10 @@ export async function ytmusicGetPersonalizedHome(chipParams?: string, forceRefre
             shelfItems.push({
               id: watchVideoId,
               title: itemTitle || 'Track',
-              subtitle: itemSub || 'YouTube Music',
+              subtitle: youtubeArtistName(itemSub) || 'YouTube Music',
               thumbnail: thumb,
               type: 'song',
+              duration: readMusicSubtitle(r.subtitle?.runs || []).map(parseDurationText).find(Boolean),
               source: 'youtube',
             });
           } else if (browseId || watchPlaylistId) {
@@ -965,115 +1073,36 @@ export async function ytmusicGetPersonalizedHome(chipParams?: string, forceRefre
     parseHomeShelves(homeJson);
   }
 
-  // 4. Build Personalized Quick Picks (LoadPersonalizedQuickPicksUseCase port: YouTube Radio Seeds + Spotify Favorites)
-  const ytSeedPool: PersistedTrack[] = [];
-  for (const t of [...localHist, ...ytmHistory, ...likedYt]) {
-    if (
-      t.id &&
-      t.id.length === 11 &&
-      !t.id.includes(':') &&
-      !ytSeedPool.some((s) => s.id === t.id)
-    ) {
-      ytSeedPool.push(t);
-      if (ytSeedPool.length >= 4) break;
-    }
-  }
-
-  const relatedBatches = await Promise.all(
-    ytSeedPool.slice(0, 3).map((seed) => ytmusicGetSuggested(seed.id).catch(() => [] as YTMusicTrack[]))
-  );
-
-  const ytQuickCandidates: PersistedTrack[] = [];
-  const seenQuick = new Set<string>();
-  for (const batch of relatedBatches) {
-    for (const r of batch.slice(0, 8)) {
-      if (r.id && !seenQuick.has(r.id)) {
-        seenQuick.add(r.id);
-        ytQuickCandidates.push({ ...r, source: 'youtube' });
-      }
-    }
-  }
-  for (const h of [...ytmHistory.slice(0, 15), ...shuffleCopy(likedYt).slice(0, 15)]) {
-    if (h.id && !seenQuick.has(h.id)) {
-      seenQuick.add(h.id);
-      ytQuickCandidates.push(h);
-    }
-  }
-
-  const spQuickCandidates = shuffleCopy(likedSp.length > 0 ? likedSp : CURATED_SPOTIFY_TRENDING).slice(0, 14);
-
-  // Interleave YouTube & Spotify Quick Picks (1:1 ratio so both platforms shine!)
+  // Use YouTube's actual home shelves and their order for recommendations.
+  // If there are no playable songs on the page, offer radio seeded by recent YouTube history.
   const quickPicks: PersistedTrack[] = [];
-  const maxQuickLen = Math.max(ytQuickCandidates.length, spQuickCandidates.length);
-  for (let i = 0; i < maxQuickLen && quickPicks.length < 24; i++) {
-    if (ytQuickCandidates[i]) quickPicks.push(ytQuickCandidates[i]);
-    if (spQuickCandidates[i] && quickPicks.length < 24) quickPicks.push(spQuickCandidates[i]);
-  }
-
-  // 5. Build Mix Pages (Wave 6/7/8 from HomeViewModel.kt: 9 tracks per mix for YouTube & Spotify)
-  const ytMixPool = shuffleCopy(
-    [...ytmHistory, ...likedYt, ...ytQuickCandidates].filter(
-      (t, idx, arr) => t.id && arr.findIndex((x) => x.id === t.id) === idx
-    )
-  ).slice(0, 36);
-  const spMixPool = shuffleCopy(
-    (likedSp.length > 0 ? likedSp : CURATED_SPOTIFY_TRENDING).filter(
-      (t, idx, arr) => t.id && arr.findIndex((x) => x.id === t.id) === idx
-    )
-  ).slice(0, 36);
-
-  const mixPages: Array<{
-    id: string;
-    title: string;
-    subtitle: string;
-    source: 'youtube' | 'spotify';
-    tracks: PersistedTrack[];
-  }> = [];
-
-  const ytChunks: PersistedTrack[][] = [];
-  for (let i = 0; i < ytMixPool.length && ytChunks.length < 4; i += 9) {
-    const slice = ytMixPool.slice(i, i + 9);
-    if (slice.length >= 4) ytChunks.push(slice);
-  }
-
-  const spChunks: PersistedTrack[][] = [];
-  for (let i = 0; i < spMixPool.length && spChunks.length < 4; i += 9) {
-    const slice = spMixPool.slice(i, i + 9);
-    if (slice.length >= 4) spChunks.push(slice);
-  }
-
-  const maxMixes = Math.max(ytChunks.length, spChunks.length);
-  for (let i = 0; i < maxMixes; i++) {
-    if (ytChunks[i]) {
-      const artistsPreview = Array.from(new Set(ytChunks[i].map((t) => t.artist.split(',')[0].trim())))
-        .slice(0, 3)
-        .join(', ');
-      mixPages.push({
-        id: `home_mix_youtube_${i}`,
-        title: `YouTube Mix #${i + 1}`,
-        subtitle: artistsPreview || 'Персональный радио-микс YouTube',
-        source: 'youtube',
-        tracks: ytChunks[i],
-      });
-    }
-    if (spChunks[i]) {
-      const artistsPreview = Array.from(new Set(spChunks[i].map((t) => t.artist.split(',')[0].trim())))
-        .slice(0, 3)
-        .join(', ');
-      mixPages.push({
-        id: `home_mix_spotify_${i}`,
-        title: `Spotify Mix #${i + 1}`,
-        subtitle: artistsPreview || 'Персональный джем Spotify',
-        source: 'spotify',
-        tracks: spChunks[i],
-      });
+  const seenQuick = new Set<string>();
+  for (const shelf of ytmShelves) {
+    for (const item of shelf.items) {
+      if (item.type !== 'song' || !item.id || seenQuick.has(item.id)) continue;
+      seenQuick.add(item.id);
+      quickPicks.push({ id: item.id, title: item.title, artist: item.subtitle, thumbnail: item.thumbnail, duration: item.duration || 0, source: 'youtube' });
     }
   }
+  let quickPicksSource: 'youtube_home' | 'history_radio' | 'unavailable' = quickPicks.length ? 'youtube_home' : 'unavailable';
+  if (!quickPicks.length && !chipParams) {
+    const seeds = [...ytmHistory, ...localHist, ...likedYt].filter((t, i, all) =>
+      t.source === 'youtube' && /^[A-Za-z0-9_-]{11}$/.test(t.id) && all.findIndex(x => x.id === t.id) === i
+    ).slice(0, 3);
+    const batches = await Promise.all(seeds.map(seed => ytmusicGetSuggested(seed.id).catch(() => [] as YTMusicTrack[])));
+    for (const batch of batches) for (const track of batch) {
+      if (!track.id || seenQuick.has(track.id)) continue;
+      seenQuick.add(track.id); quickPicks.push({ ...track, source: 'youtube' });
+      if (quickPicks.length >= 24) break;
+    }
+    if (quickPicks.length) quickPicksSource = 'history_radio';
+  }
+  const mixPages: Array<{ id: string; title: string; subtitle: string; source: 'youtube' | 'spotify'; tracks: PersistedTrack[] }> = [];
 
   // 6. Keep Listening (YTM History + Local History) & Forgotten Favorites (Liked Songs from both platforms)
   const keepListening = [...localHist, ...ytmHistory]
     .filter((t, idx, arr) => t.id && arr.findIndex((x) => x.id === t.id) === idx)
-    .slice(0, 18);
+    .slice(0, 80);
 
   const forgottenFavorites = shuffleCopy(likedAll).slice(0, 18);
 
@@ -1088,11 +1117,14 @@ export async function ytmusicGetPersonalizedHome(chipParams?: string, forceRefre
     })
     .slice(0, 12);
 
-  const spotifyTracks = (likedSp.length > 0 ? shuffleCopy(likedSp).slice(0, 16) : CURATED_SPOTIFY_TRENDING);
+  const spotifyTracks = likedSp.slice(0, 16);
 
   const result = {
     chips,
-    quickPicks,
+    quickPicks: quickPicks.slice(0, 80),
+    recentYoutube: ytmHistory.filter((t) => t.source === 'youtube' && t.id).slice(0, 100),
+    quickPicksSource,
+    youtubeAccountConnected: Boolean(getActiveYouTubeAccount()),
     mixPages,
     keepListening,
     forgottenFavorites,

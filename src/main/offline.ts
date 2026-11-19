@@ -90,7 +90,7 @@ let instance: OfflineLibrary | undefined;
 export const getOfflineLibrary = () => instance ??= new OfflineLibrary(path.join(app.getPath('userData'), 'offline-audio'));
 
 export function setupOfflineIPC(resolve: (track: PersistedTrack) => Promise<{ streamUrl: string | null; headers?: Record<string,string> }>): void {
-  ipcMain.handle('offline:find', async (_event, id: string) => getOfflineLibrary().find(id) || (await import('./playbackCache')).getPlaybackCache().find(id));
+  ipcMain.handle('offline:find', (_event, id: string) => getOfflineLibrary().find(id));
   ipcMain.handle('offline:list', () => getOfflineLibrary().list());
   ipcMain.handle('offline:remove', (_event, id: string) => {
     try { getOfflineLibrary().remove(id); return { ok: true }; } catch (error: any) { return { ok: false, error: error.message }; }

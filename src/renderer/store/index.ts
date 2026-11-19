@@ -10,8 +10,12 @@ import type {
   SavedYouTubeAccountPublic,
   TogetherState,
 } from '../types/electron';
+import { generateMaterialYouScheme, extractPaletteFromArtwork, hexToRgb } from '../lib/color';
+import type { BackdropTonePalette, ExtractedArtworkResult } from '../lib/color';
 
 export type { Track, PlaylistItem, PlayerStyleId, AudioSourceId, AutomixMode, AutoMixPlan };
+export { generateMaterialYouScheme, extractPaletteFromArtwork, hexToRgb };
+export type { BackdropTonePalette, ExtractedArtworkResult };
 
 export interface SmartToast {
   id: string;
@@ -54,7 +58,6 @@ interface PlayerState {
   originalQueue: Track[];
   queueIndex: number;
   isPlaying: boolean;
-  isScrubbing: boolean;
   automixing: boolean;
   automixPlan: AutoMixPlan | null;
   position: number;
@@ -62,11 +65,13 @@ interface PlayerState {
   trackStartTimeSec: number;
   resolvedSourceBadge: string;
   resolvedSourceId: AudioSourceId | 'local' | null;
+  resolvedSpotifyTrack?: { trackId: string; spotifyId: string };
   isLosslessActive: boolean;
   volume: number;
   repeat: 'none' | 'one' | 'all';
   shuffle: boolean;
   loading: boolean;
+  playbackStartAt: number;
   speed: number;
   pitchSemitones: number;
   normalization: boolean;
@@ -78,6 +83,8 @@ interface PlayerState {
   audioDevice: string;
   crossfade: number;
   smartDjAutomix: boolean;
+  prebufferNextTrack: boolean;
+  autoRadioOnQueueEnd: boolean;
   automixMode: AutomixMode;
   gaplessAlbum: boolean;
   eqEnabled: boolean;
@@ -115,13 +122,12 @@ interface PlayerState {
   reorderQueue: (fromIndex: number, toIndex: number) => void;
   clearQueue: () => void;
   setIsPlaying: (playing: boolean) => void;
-  setIsScrubbing: (scrubbing: boolean) => void;
   setAutomixing: (automixing: boolean) => void;
   setAutomixPlan: (plan: AutoMixPlan | null) => void;
   setPosition: (pos: number) => void;
   setDuration: (dur: number) => void;
   setTrackStartTimeSec: (sec: number) => void;
-  setResolvedStreamMeta: (badge: string, sourceId: AudioSourceId | 'local', lossless: boolean) => void;
+  setResolvedStreamMeta: (badge: string, sourceId: AudioSourceId | 'local' | null, lossless: boolean, spotifyId?: string) => void;
   setVolume: (vol: number) => void;
   setRepeat: (mode: 'none' | 'one' | 'all') => void;
   toggleShuffle: () => void;
@@ -167,13 +173,15 @@ function persistQueueState(state: PlayerState) {
     .catch(() => {});
 }
 
+let indexedLikedSongs: Track[] | undefined;
+let likedTrackIds = new Set<string>();
+
 export const usePlayerStore = create<PlayerState>((set, get) => ({
   currentTrack: null,
   queue: [],
   originalQueue: [],
   queueIndex: -1,
   isPlaying: false,
-  isScrubbing: false,
   automixing: false,
   automixPlan: null,
   position: 0,
@@ -186,6 +194,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   repeat: 'none',
   shuffle: false,
   loading: false,
+  playbackStartAt: 0,
   speed: 1.0,
   pitchSemitones: 0,
   normalization: false,
@@ -197,6 +206,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   audioDevice: 'auto',
   crossfade: 6,
   smartDjAutomix: true,
+  prebufferNextTrack: true,
+  autoRadioOnQueueEnd: true,
   automixMode: 'auto',
   gaplessAlbum: true,
   eqEnabled: false,
@@ -227,7 +238,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   aiContentFilter: false,
 
   setCurrentTrack: (track) => {
-    set({ currentTrack: track, position: 0, abLoopA: null, abLoopB: null });
+    set({ currentTrack: track, resolvedSpotifyTrack: undefined, position: 0, automixPlan: null, abLoopA: null, abLoopB: null });
     window.electronAPI?.player?.setAbLoop?.(null, null);
     persistQueueState(get());
   },
@@ -238,7 +249,11 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       (t) => !blocked.has((t.artist || '').toLowerCase())
     );
     const list = filtered.length > 0 ? filtered : tracks;
-    const clampedIdx = Math.max(0, Math.min(startIndex, list.length - 1));
+    const requested = tracks[Math.max(0, Math.min(startIndex, tracks.length - 1))];
+    const requestedIndex = list === tracks || filtered.length === tracks.length
+      ? startIndex
+      : list.indexOf(requested);
+    const clampedIdx = Math.max(0, Math.min(requestedIndex, list.length - 1));
     const current = list[clampedIdx] ?? null;
 
     if (get().shuffle && list.length > 1) {
@@ -290,14 +305,12 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       if (index < 0 || index >= s.queue.length) return s;
       const nextQueue = [...s.queue];
       const [removed] = nextQueue.splice(index, 1);
-      const nextOriginal = s.originalQueue.filter((t) => t.id !== removed?.id);
-
-      let nextIndex = s.currentTrack
-        ? nextQueue.findIndex((t) => t.id === s.currentTrack?.id)
-        : -1;
-      if (nextIndex === -1 && nextQueue.length > 0) {
-        nextIndex = Math.min(index, nextQueue.length - 1);
-      }
+      // Preserve a single matching occurrence in the unshuffled queue.
+      const nextOriginal = [...s.originalQueue];
+      let originalIndex = nextOriginal.indexOf(removed);
+      if (originalIndex < 0) originalIndex = nextOriginal.findIndex(t => t.id === removed.id);
+      if (originalIndex >= 0) nextOriginal.splice(originalIndex, 1);
+      const nextIndex = index <= s.queueIndex ? s.queueIndex - 1 : s.queueIndex;
       return {
         queue: nextQueue,
         originalQueue: nextOriginal,
@@ -315,10 +328,11 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       const next = [...s.queue];
       const [moved] = next.splice(fromIndex, 1);
       next.splice(toIndex, 0, moved);
-      const newCurrentIdx = s.currentTrack
-        ? next.findIndex((t) => t.id === s.currentTrack?.id)
-        : s.queueIndex;
-      return { queue: next, queueIndex: newCurrentIdx >= 0 ? newCurrentIdx : s.queueIndex };
+      let newCurrentIdx = s.queueIndex;
+      if (fromIndex === s.queueIndex) newCurrentIdx = toIndex;
+      else if (fromIndex < s.queueIndex && toIndex >= s.queueIndex) newCurrentIdx--;
+      else if (fromIndex > s.queueIndex && toIndex <= s.queueIndex) newCurrentIdx++;
+      return { queue: next, queueIndex: newCurrentIdx };
     });
     persistQueueState(get());
   },
@@ -333,14 +347,18 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
 
   setIsPlaying: (isPlaying) => set({ isPlaying }),
-  setIsScrubbing: (isScrubbing) => set({ isScrubbing }),
   setAutomixing: (automixing) => set({ automixing }),
   setAutomixPlan: (automixPlan) => set({ automixPlan }),
   setPosition: (position) => set({ position }),
   setDuration: (duration) => set({ duration }),
   setTrackStartTimeSec: (trackStartTimeSec) => set({ trackStartTimeSec }),
-  setResolvedStreamMeta: (resolvedSourceBadge, resolvedSourceId, isLosslessActive) =>
-    set({ resolvedSourceBadge, resolvedSourceId, isLosslessActive }),
+  setResolvedStreamMeta: (resolvedSourceBadge, resolvedSourceId, isLosslessActive, spotifyId) =>
+    set((state) => ({
+      resolvedSourceBadge, resolvedSourceId, isLosslessActive,
+      resolvedSpotifyTrack: spotifyId && state.currentTrack
+        ? { trackId: state.currentTrack.id, spotifyId }
+        : undefined,
+    })),
 
   setVolume: (volume) => {
     set({ volume });
@@ -353,22 +371,29 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
 
   toggleShuffle: () => {
-    const { shuffle, queue, originalQueue, currentTrack } = get();
+    const { shuffle, queue, queueIndex, originalQueue, currentTrack } = get();
     const nextShuffle = !shuffle;
     if (nextShuffle && queue.length > 1) {
-      const rest = queue.filter((t) => t.id !== currentTrack?.id);
+      const hasCurrent = queueIndex >= 0 && queueIndex < queue.length && queue[queueIndex]?.id === currentTrack?.id;
+      const rest = queue.filter((_, index) => !hasCurrent || index !== queueIndex);
       for (let i = rest.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [rest[i], rest[j]] = [rest[j], rest[i]];
       }
-      const newQ = currentTrack ? [currentTrack, ...rest] : rest;
-      set({ shuffle: true, queue: newQ, queueIndex: currentTrack ? 0 : -1 });
+      const newQ = hasCurrent ? [queue[queueIndex], ...rest] : rest;
+      set({ shuffle: true, queue: newQ, queueIndex: hasCurrent ? 0 : -1 });
     } else if (!nextShuffle && originalQueue.length > 0) {
-      const idx = originalQueue.findIndex((t) => t.id === currentTrack?.id);
+      const queuedCurrent = queue[queueIndex];
+      let idx = queuedCurrent ? originalQueue.indexOf(queuedCurrent) : -1;
+      if (idx < 0 && queuedCurrent) {
+        const occurrence = queue.slice(0, queueIndex).filter(t => t.id === queuedCurrent.id).length;
+        const matches = originalQueue.map((t, i) => t.id === queuedCurrent.id ? i : -1).filter(i => i >= 0);
+        idx = matches[Math.min(occurrence, matches.length - 1)] ?? -1;
+      }
       set({
         shuffle: false,
         queue: [...originalQueue],
-        queueIndex: idx >= 0 ? idx : 0,
+        queueIndex: idx,
       });
     } else {
       set({ shuffle: nextShuffle });
@@ -475,9 +500,6 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   nextTrack: () => {
     const { queue, queueIndex, repeat } = get();
     if (queue.length === 0) return null;
-    if (repeat === 'one') {
-      return queue[queueIndex] ?? null;
-    }
     let next = queueIndex + 1;
     if (next >= queue.length) {
       if (repeat === 'all') next = 0;
@@ -546,7 +568,12 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
   isTrackLiked: (track) => {
     if (!track) return false;
-    return get().likedSongs.some((t) => t.id === track.id);
+    const { likedSongs } = get();
+    if (indexedLikedSongs !== likedSongs) {
+      indexedLikedSongs = likedSongs;
+      likedTrackIds = new Set(likedSongs.map((song) => song.id));
+    }
+    return likedTrackIds.has(track.id);
   },
 
   savePlaylist: (playlist) => {
@@ -597,6 +624,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 // ===== Search & Discovery Store =====
 interface SearchState {
   query: string;
+  submittedQuery: string;
+  searchError: boolean;
   results: Track[];
   albums: any[];
   artists: any[];
@@ -605,6 +634,8 @@ interface SearchState {
   suggestions: string[];
   searching: boolean;
   setQuery: (q: string) => void;
+  setSubmittedQuery: (q: string) => void;
+  setSearchError: (error: boolean) => void;
   setResults: (results: Track[]) => void;
   setSearchAllResults: (res: { songs: Track[]; albums: any[]; artists: any[]; playlists: any[] }) => void;
   setSourceFilter: (s: 'all' | AudioSourceId) => void;
@@ -614,6 +645,8 @@ interface SearchState {
 
 export const useSearchStore = create<SearchState>((set) => ({
   query: '',
+  submittedQuery: '',
+  searchError: false,
   results: [],
   albums: [],
   artists: [],
@@ -622,6 +655,8 @@ export const useSearchStore = create<SearchState>((set) => ({
   suggestions: [],
   searching: false,
   setQuery: (query) => set({ query }),
+  setSubmittedQuery: (submittedQuery) => set({ submittedQuery }),
+  setSearchError: (searchError) => set({ searchError }),
   setResults: (results) => set({ results }),
   setSearchAllResults: (res) =>
     set({
@@ -859,8 +894,14 @@ interface UIState {
   seedColor: string;
   dynamicColorFromArt: boolean;
   activeArtColor: string | null;
+  activeArtGradientColors: string[];
   uiScale: number;
   playerStyle: PlayerStyleId;
+  ambientBackgroundBlur: boolean;
+  reduceInterfaceMotion: boolean;
+  interfaceMotionPreset: AppSettings['interfaceMotionPreset'];
+  compactTrackRows: boolean;
+  glassEffect: AppSettings['glassEffect'];
   visualizerEnabled: boolean;
   visualizerStyle: 'bars' | 'wave' | 'circular';
   showNowPlaying: boolean;
@@ -890,9 +931,10 @@ interface UIState {
   setTheme: (t: 'dark' | 'light' | 'amoled', persist?: boolean) => void;
   setSeedColor: (c: string, persist?: boolean) => void;
   setDynamicColorFromArt: (enabled: boolean) => void;
-  setActiveArtColor: (c: string | null) => void;
+  setActiveArtColor: (c: string | null, gradientColors?: string[]) => void;
   setUiScale: (scale: number, persist?: boolean) => void;
   setPlayerStyle: (style: PlayerStyleId, persist?: boolean) => void;
+  setAppearance: (settings: Partial<Pick<AppSettings, 'ambientBackgroundBlur' | 'compactTrackRows' | 'glassEffect' | 'reduceInterfaceMotion' | 'interfaceMotionPreset'>>, persist?: boolean) => void;
   setVisualizer: (enabled: boolean, style?: 'bars' | 'wave' | 'circular') => void;
   setShowNowPlaying: (v: boolean) => void;
   setMiniPipMode: (v: boolean) => void;
@@ -908,61 +950,63 @@ interface UIState {
   setDesktopSetting: (partial: Partial<AppSettings>) => void;
 }
 
-export function applyThemeCssVars(theme: 'dark' | 'light' | 'amoled', seedHex: string) {
+let palettePropertiesRegistered = false;
+
+export function applyThemeCssVars(
+  theme: 'dark' | 'light' | 'amoled',
+  seedHex: string,
+  gradientColors: string[] = [],
+  animateArtwork = false,
+) {
   const root = document.documentElement;
-  const hex = seedHex.replace(/^#/, '');
-  const r = parseInt(hex.slice(0, 2), 16);
-  const g = parseInt(hex.slice(2, 4), 16);
-  const b = parseInt(hex.slice(4, 6), 16);
+  const scheme = generateMaterialYouScheme(seedHex, theme, gradientColors);
+  const rgb = hexToRgb(scheme.primary);
+  const colors = {
+    '--md-primary': scheme.primary,
+    '--md-on-primary': scheme.onPrimary,
+    '--md-primary-container': scheme.primaryContainer,
+    '--md-on-primary-container': scheme.onPrimaryContainer,
+    '--md-secondary': scheme.secondary,
+    '--md-on-secondary': scheme.onSecondary,
+    '--md-secondary-container': scheme.secondaryContainer,
+    '--md-on-secondary-container': scheme.onSecondaryContainer,
+    '--md-tertiary': scheme.tertiary,
+    '--md-on-tertiary': scheme.onTertiary,
+    '--md-tertiary-container': scheme.tertiaryContainer,
+    '--md-on-tertiary-container': scheme.onTertiaryContainer,
+    '--md-surface': scheme.surface,
+    '--md-surface-dim': scheme.surfaceDim,
+    '--md-surface-bright': scheme.surfaceBright,
+    '--md-surface-container-lowest': scheme.surfaceContainerLowest,
+    '--md-surface-container-low': scheme.surfaceContainerLow,
+    '--md-surface-container': scheme.surfaceContainer,
+    '--md-surface-container-high': scheme.surfaceContainerHigh,
+    '--md-surface-container-highest': scheme.surfaceContainerHighest,
+    '--md-surface-variant': scheme.surfaceVariant,
+    '--md-on-surface': scheme.onSurface,
+    '--md-on-surface-variant': scheme.onSurfaceVariant,
+    '--md-outline': scheme.outline,
+    '--md-outline-variant': scheme.outlineVariant,
+    '--md-error': scheme.error,
+    '--md-on-error': scheme.onError,
+    '--player-glow-accent': scheme.playerGlowAccent,
+    '--player-bg-tint': scheme.playerBgTint,
+    '--player-backdrop-top': scheme.backdropTop,
+    '--player-backdrop-mid': scheme.backdropMid,
+    '--player-backdrop-bottom': scheme.backdropBottom,
+  };
 
-  root.style.setProperty('--md-primary', seedHex);
-  root.style.setProperty('--md-primary-rgb', `${r}, ${g}, ${b}`);
-  root.style.setProperty('--md-primary-container', `rgba(${r}, ${g}, ${b}, 0.25)`);
-  root.style.setProperty('--md-on-primary-container', seedHex);
-  root.style.setProperty('--player-glow-accent', `rgba(${r}, ${g}, ${b}, 0.35)`);
-  root.style.setProperty('--player-bg-tint', `rgba(${r}, ${g}, ${b}, 0.12)`);
-
-  if (theme === 'light') {
-    root.style.setProperty('--md-surface', '#f6f3f8');
-    root.style.setProperty('--md-surface-container', '#ece8f0');
-    root.style.setProperty('--md-surface-container-high', '#e2dde8');
-    root.style.setProperty('--md-surface-container-highest', '#d7d1df');
-    root.style.setProperty('--md-on-surface', '#1d1b20');
-    root.style.setProperty('--md-on-surface-variant', '#49454f');
-    root.style.setProperty('--md-outline', '#79747e');
-    root.style.setProperty('--md-outline-variant', '#cac4d0');
-    root.style.setProperty('--md-on-primary', '#ffffff');
-  } else if (theme === 'amoled') {
-    root.style.setProperty('--md-surface', '#000000');
-    root.style.setProperty('--md-surface-container', '#0a090d');
-    root.style.setProperty('--md-surface-container-high', '#14121a');
-    root.style.setProperty('--md-surface-container-highest', '#1e1b26');
-    root.style.setProperty('--md-on-surface', '#f2edf5');
-    root.style.setProperty('--md-on-surface-variant', '#cac4d0');
-    root.style.setProperty('--md-outline', '#938f99');
-    root.style.setProperty('--md-outline-variant', '#35313c');
-    root.style.setProperty('--md-on-primary', '#1e0c4e');
-  } else {
-    root.style.setProperty('--md-surface', '#141218');
-    root.style.setProperty('--md-surface-container', '#1e1b22');
-    root.style.setProperty('--md-surface-container-high', '#2b2831');
-    root.style.setProperty('--md-surface-container-highest', '#36343b');
-    root.style.setProperty('--md-on-surface', '#e6e1e5');
-    root.style.setProperty('--md-on-surface-variant', '#cac4d0');
-    root.style.setProperty('--md-outline', '#938f99');
-    root.style.setProperty('--md-outline-variant', '#49454f');
-    root.style.setProperty('--md-on-primary', '#341e72');
+  if (!palettePropertiesRegistered && typeof CSS !== 'undefined' && CSS.registerProperty) {
+    for (const [name, initialValue] of Object.entries(colors)) {
+      CSS.registerProperty({ name, syntax: '<color>', inherits: true, initialValue });
+    }
+    root.style.setProperty('--artwork-palette-properties', Object.keys(colors).join(', '));
+    palettePropertiesRegistered = true;
   }
-  // Tint every surface so artwork colours reach the page, sidebar and cards.
-  const mix = (base: number, amount: number) =>
-    `rgb(${[r, g, b].map((c) => Math.round(base * (1 - amount) + c * amount)).join(', ')})`;
-  const levels = theme === 'light'
-    ? [[248, 0.10], [240, 0.14], [232, 0.18], [222, 0.22]]
-    : theme === 'amoled'
-      ? [[0, 0], [6, 0.08], [12, 0.12], [18, 0.16]]
-      : [[14, 0.14], [22, 0.18], [30, 0.22], [38, 0.26]];
-  ['--md-surface', '--md-surface-container', '--md-surface-container-high', '--md-surface-container-highest']
-    .forEach((name, i) => root.style.setProperty(name, mix(levels[i][0], levels[i][1])));
+
+  root.toggleAttribute('data-artwork-palette-transition', animateArtwork && palettePropertiesRegistered);
+  for (const [name, color] of Object.entries(colors)) root.style.setProperty(name, color);
+  root.style.setProperty('--md-primary-rgb', `${rgb.r}, ${rgb.g}, ${rgb.b}`);
 }
 
 export const useUIStore = create<UIState>((set, get) => ({
@@ -970,8 +1014,14 @@ export const useUIStore = create<UIState>((set, get) => ({
   seedColor: '#cbb9f5',
   dynamicColorFromArt: true,
   activeArtColor: null,
+  activeArtGradientColors: [],
   uiScale: 1.0,
   playerStyle: 'flamingo',
+  ambientBackgroundBlur: true,
+  reduceInterfaceMotion: false,
+  interfaceMotionPreset: 'balanced',
+  compactTrackRows: false,
+  glassEffect: 'soft',
   visualizerEnabled: true,
   visualizerStyle: 'bars',
   showNowPlaying: false,
@@ -1000,29 +1050,30 @@ export const useUIStore = create<UIState>((set, get) => ({
 
   setTheme: (theme, persist = true) => {
     set({ theme });
-    const seed = get().dynamicColorFromArt && get().activeArtColor ? get().activeArtColor! : get().seedColor;
-    applyThemeCssVars(theme, seed);
+    const { dynamicColorFromArt, activeArtColor, activeArtGradientColors, seedColor } = get();
+    applyThemeCssVars(theme, (dynamicColorFromArt && activeArtColor) || seedColor,
+      dynamicColorFromArt ? activeArtGradientColors : []);
     if (persist) window.electronAPI?.db?.updateSettings({ theme });
   },
 
   setSeedColor: (seedColor, persist = true) => {
     set({ seedColor });
-    applyThemeCssVars(get().theme, seedColor);
+    const { theme, dynamicColorFromArt, activeArtColor, activeArtGradientColors } = get();
+    applyThemeCssVars(theme, (dynamicColorFromArt && activeArtColor) || seedColor,
+      dynamicColorFromArt ? activeArtGradientColors : []);
     if (persist) window.electronAPI?.db?.updateSettings({ seedColor });
   },
 
   setDynamicColorFromArt: (dynamicColorFromArt) => {
-    set({ dynamicColorFromArt });
-    const color = dynamicColorFromArt && get().activeArtColor ? get().activeArtColor! : get().seedColor;
-    applyThemeCssVars(get().theme, color);
+    set({ dynamicColorFromArt, activeArtColor: null, activeArtGradientColors: [] });
+    applyThemeCssVars(get().theme, get().seedColor);
     window.electronAPI?.db?.updateSettings({ dynamicColorFromArt });
   },
 
-  setActiveArtColor: (activeArtColor) => {
-    set({ activeArtColor });
-    if (get().dynamicColorFromArt) {
-      applyThemeCssVars(get().theme, activeArtColor || get().seedColor);
-    }
+  setActiveArtColor: (activeArtColor, activeArtGradientColors = []) => {
+    if (!get().dynamicColorFromArt) return;
+    set({ activeArtColor, activeArtGradientColors });
+    applyThemeCssVars(get().theme, activeArtColor || get().seedColor, activeArtGradientColors, true);
   },
 
   setUiScale: (uiScale, persist = true) => {
@@ -1035,6 +1086,15 @@ export const useUIStore = create<UIState>((set, get) => ({
   setPlayerStyle: (playerStyle, persist = true) => {
     set({ playerStyle });
     if (persist) window.electronAPI?.db?.updateSettings({ playerStyle });
+  },
+
+  setAppearance: (settings, persist = true) => {
+    set(settings);
+    const root = document.documentElement;
+    root.dataset.glassEffect = get().glassEffect;
+    root.toggleAttribute('data-compact-tracks', get().compactTrackRows);
+    root.toggleAttribute('data-reduced-motion', get().reduceInterfaceMotion);
+    if (persist) void window.electronAPI?.db?.updateSettings(settings);
   },
 
   setVisualizer: (visualizerEnabled, visualizerStyle) => {
@@ -1077,74 +1137,13 @@ export const useUIStore = create<UIState>((set, get) => ({
   },
 }));
 
-export async function extractDominantColorFromImage(imageUrl: string): Promise<string | null> {
-  if (!imageUrl) return null;
-  // 1. Prefer native Electron extractor (bypasses CORS restrictions on CDNs like i.ytimg.com and scdn.co)
-  if (window.electronAPI?.desktop?.extractPalette) {
-    try {
-      const pal = await window.electronAPI.desktop.extractPalette(imageUrl);
-      if (pal?.primary) return pal.primary;
-    } catch {
-      /* fallback to DOM canvas */
-    }
+export async function extractArtworkColors(imageUrl: string, seedColor: string) {
+  let palette = await extractPaletteFromArtwork(imageUrl, seedColor);
+  if (!palette) {
+    const thumbnail = await window.electronAPI?.desktop?.readArtworkThumbnail?.(imageUrl);
+    if (thumbnail) palette = await extractPaletteFromArtwork(thumbnail, seedColor);
   }
-
-  // 2. Fallback in-browser canvas with proper monochrome and lightness support
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      try {
-        const canvas = document.createElement('canvas');
-        canvas.width = 24;
-        canvas.height = 24;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return resolve(null);
-        ctx.drawImage(img, 0, 0, 24, 24);
-        const data = ctx.getImageData(0, 0, 24, 24).data;
-        let bestR = 203;
-        let bestG = 185;
-        let bestB = 245;
-        let bestScore = -1;
-        let totalSat = 0;
-        let count = 0;
-
-        for (let i = 0; i < data.length; i += 4) {
-          const r = data[i];
-          const g = data[i + 1];
-          const b = data[i + 2];
-          const max = Math.max(r, g, b);
-          const min = Math.min(r, g, b);
-          const l = (max + min) / 510;
-          const s = max === min ? 0 : (max - min) / (255 - Math.abs(max + min - 255));
-          totalSat += s;
-          count++;
-
-          if (l > 0.18 && l < 0.86 && s > bestScore) {
-            bestScore = s;
-            bestR = r;
-            bestG = g;
-            bestB = b;
-          }
-        }
-
-        // If monochrome or grayscale artwork
-        if (count > 0 && totalSat / count < 0.1) {
-          return resolve('#94a3b8');
-        }
-
-        const mixR = Math.min(255, Math.round(bestR * 0.8 + 255 * 0.2));
-        const mixG = Math.min(255, Math.round(bestG * 0.8 + 255 * 0.2));
-        const mixB = Math.min(255, Math.round(bestB * 0.8 + 255 * 0.2));
-        const hex = `#${[mixR, mixG, mixB].map((x) => x.toString(16).padStart(2, '0')).join('')}`;
-        resolve(hex);
-      } catch {
-        resolve(null);
-      }
-    };
-    img.onerror = () => resolve(null);
-    img.src = imageUrl;
-  });
+  return { color: palette?.seedHex ?? null, gradients: palette?.gradientColors ?? [] };
 }
 
 let hydrated = false;
@@ -1161,6 +1160,13 @@ export async function hydrateStoresFromDatabase(): Promise<void> {
     ui.setSeedColor(s.seedColor || '#cbb9f5', false);
     ui.setUiScale(s.uiScale || 1.0, false);
     ui.setPlayerStyle(s.playerStyle || 'flamingo', false);
+    ui.setAppearance({
+      ambientBackgroundBlur: s.ambientBackgroundBlur ?? true,
+      reduceInterfaceMotion: s.reduceInterfaceMotion ?? false,
+      interfaceMotionPreset: s.interfaceMotionPreset ?? 'balanced',
+      compactTrackRows: s.compactTrackRows ?? false,
+      glassEffect: s.glassEffect ?? 'soft',
+    }, false);
     useUIStore.setState({
       dynamicColorFromArt: s.dynamicColorFromArt ?? true,
       visualizerEnabled: s.visualizerEnabled ?? true,
@@ -1196,6 +1202,8 @@ export async function hydrateStoresFromDatabase(): Promise<void> {
       audioDevice: s.audioDevice ?? 'auto',
       crossfade: s.crossfade ?? 6,
       smartDjAutomix: s.smartDjAutomix ?? true,
+      prebufferNextTrack: s.prebufferNextTrack ?? true,
+      autoRadioOnQueueEnd: s.autoRadioOnQueueEnd ?? true,
       automixMode: s.automixMode ?? 'auto',
       gaplessAlbum: s.gaplessAlbum ?? true,
       eqEnabled: s.eqEnabled ?? false,

@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import {
-  PlugZap,
   CheckCircle2,
   XCircle,
   RefreshCw,
@@ -208,28 +207,17 @@ export default function IntegrationsPage() {
   };
 
   return (
-    <div className="p-8 max-w-6xl mx-auto space-y-7 pb-20 select-none">
-      {/* Top Header */}
-      <div className="flex items-center justify-between flex-wrap gap-4">
-        <div>
-          <h1 className="text-2xl font-black text-on-surface flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-primary/15 text-primary flex items-center justify-center shadow-sm">
-              <PlugZap size={22} />
-            </div>
-            <span>Интеграции аккаунтов и Матрица источников</span>
-          </h1>
-          <p className="text-xs text-on-surface-variant mt-1 ml-13">
-            Привязка Spotify + YouTube Music + SoundCloud, приоритет Lossless-маршрутизации и импорт плейлистов
-          </p>
-        </div>
+    <div className="screen screen-settings">
+      <header className="screen-header">
+        <h1>Интеграции</h1>
         <button
           onClick={() => void handleCheckLatencies()}
           className="px-4 py-2.5 rounded-2xl bg-surface-container-high hover:bg-surface-container-highest text-xs font-semibold text-on-surface flex items-center gap-2 transition-all shadow-sm active:scale-98"
         >
           <Activity size={15} className={checkingLatency ? 'animate-spin text-primary' : 'text-primary'} />
-          <span>Проверить пинг серверов</span>
+          <span>Проверить задержку</span>
         </button>
-      </div>
+      </header>
 
       {/* Primary Trio: Spotify & YouTube Music */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -320,7 +308,7 @@ export default function IntegrationsPage() {
                 </div>
                 <div>
                   <h2 className="text-base font-extrabold text-on-surface flex items-center gap-2.5">
-                    <span>YouTube / YTM</span>
+                    <span>YouTube Music</span>
                     {ytmConnected ? (
                       <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-red-500/20 text-red-300 font-bold inline-flex items-center gap-1">
                         <CheckCircle2 size={11} /> SAPISID
@@ -649,7 +637,7 @@ export default function IntegrationsPage() {
           <section className="p-6 rounded-3xl bg-surface-container/70 backdrop-blur-xl shadow-md space-y-4">
             <h2 className="text-base font-extrabold text-on-surface flex items-center gap-2.5">
               <Activity size={18} className="text-primary" />
-              <span>Latency Server Monitor</span>
+              <span>Задержка серверов</span>
             </h2>
             <div className="grid grid-cols-2 gap-2.5 text-xs">
               {latencies.map((item) => (

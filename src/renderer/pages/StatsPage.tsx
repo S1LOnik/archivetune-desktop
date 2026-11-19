@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { BarChart3, Clock, Flame, Trophy, Trash2 } from 'lucide-react';
+import { Clock, Flame, Trophy, Trash2 } from 'lucide-react';
 import { usePlayer } from '../lib/usePlayer';
 
 export default function StatsPage() {
@@ -33,17 +33,9 @@ export default function StatsPage() {
   const totalMins = Math.round((stats.totalSeconds || 0) / 60);
 
   return (
-    <div className="p-6 max-w-6xl mx-auto space-y-7">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-black text-on-surface flex items-center gap-2.5">
-            <BarChart3 className="text-primary" size={26} />
-            Статистика & Year in Music
-          </h1>
-          <p className="text-xs text-on-surface-variant mt-1">
-            Локальная аналитика ваших прослушиваний и активности по часам
-          </p>
-        </div>
+    <div className="screen screen-settings">
+      <header className="screen-header">
+        <h1>Статистика</h1>
         <button
           onClick={async () => {
             const reset = await window.electronAPI.db.resetStats();
@@ -53,7 +45,7 @@ export default function StatsPage() {
         >
           <Trash2 size={13} /> Сбросить статистику
         </button>
-      </div>
+      </header>
 
       {/* KPI Summary */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -103,7 +95,7 @@ export default function StatsPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <section className="p-5 rounded-3xl bg-surface-container   space-y-3">
-          <h2 className="text-base font-bold text-on-surface">Топ треки</h2>
+          <h2 className="text-base font-bold text-on-surface">Популярные треки</h2>
           {topTracks.length === 0 ? (
             <p className="text-xs text-on-surface-variant">Послушайте пару треков, чтобы увидеть топ.</p>
           ) : (
@@ -137,7 +129,7 @@ export default function StatsPage() {
         </section>
 
         <section className="p-5 rounded-3xl bg-surface-container   space-y-3">
-          <h2 className="text-base font-bold text-on-surface">Топ исполнители</h2>
+          <h2 className="text-base font-bold text-on-surface">Популярные исполнители</h2>
           {topArtists.length === 0 ? (
             <p className="text-xs text-on-surface-variant">Пока недостаточно данных.</p>
           ) : (

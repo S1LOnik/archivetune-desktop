@@ -51,6 +51,7 @@ export default function SourceSwitcherModal() {
     try {
       const list = await window.electronAPI.providers.findAlternatives({
         id: sourceSwitcherTrack.id,
+        source: sourceSwitcherTrack.source,
         title: sourceSwitcherTrack.title,
         artist: sourceSwitcherTrack.artist,
         album: sourceSwitcherTrack.album,
@@ -75,6 +76,7 @@ export default function SourceSwitcherModal() {
       ...sourceSwitcherTrack,
       id: cand.id,
       source: cand.source,
+      spotifyUri: cand.source === 'spotify' ? cand.id : undefined,
       thumbnail: cand.thumbnail || sourceSwitcherTrack.thumbnail,
       duration: cand.duration || sourceSwitcherTrack.duration,
     };
@@ -98,7 +100,7 @@ export default function SourceSwitcherModal() {
           <div>
             <h2 className="text-base font-bold text-on-surface flex items-center gap-2">
               <Sparkles size={17} className="text-primary" />
-              Умный переключатель источников (Multi-Source Matrix)
+              Источник звука
             </h2>
             <p className="text-xs text-on-surface-variant truncate max-w-lg mt-0.5">
               {sourceSwitcherTrack.title} — {sourceSwitcherTrack.artist}
@@ -114,6 +116,7 @@ export default function SourceSwitcherModal() {
               <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
             </button>
             <button
+              aria-label="Закрыть выбор источника"
               onClick={() => setSourceSwitcherTrack(null)}
               className="p-2 rounded-xl hover:bg-surface-container-high text-on-surface-variant"
             >
@@ -127,6 +130,7 @@ export default function SourceSwitcherModal() {
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="flex items-center gap-2">
               <button
+                aria-pressed={autoUpgradeLossless}
                 onClick={() => setAutoUpgradeLossless(!autoUpgradeLossless)}
                 className={`px-3 py-1 rounded-xl text-xs font-bold  transition ${
                   autoUpgradeLossless
@@ -134,12 +138,13 @@ export default function SourceSwitcherModal() {
                     : 'bg-surface-container text-on-surface-variant '
                 }`}
               >
-                {autoUpgradeLossless ? '✓ Авто-выбор лучшего ВКЛ' : 'Авто-выбор лучшего ВЫКЛ'}
+                {autoUpgradeLossless ? 'Автовыбор включён' : 'Автовыбор выключен'}
               </button>
               <div className="flex items-center gap-2 text-xs text-on-surface-variant">
-                <span>Порог схожести:</span>
+                <span>Минимальное совпадение</span>
                 <input
                   type="range"
+                  aria-label="Минимальное совпадение"
                   min={70}
                   max={98}
                   step={1}
@@ -161,14 +166,14 @@ export default function SourceSwitcherModal() {
                 className="px-3 py-1 rounded-xl text-xs font-bold bg-primary text-on-primary hover:opacity-90 transition flex items-center gap-1.5"
               >
                 <Sparkles size={12} />
-                Выбрать лучший ({candidates[0].source.toUpperCase()} • {candidates[0].qualityLabel})
+                Рекомендуемый вариант ({candidates[0].source.toUpperCase()} • {candidates[0].qualityLabel})
               </button>
             )}
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-[11px] font-semibold text-on-surface-variant uppercase tracking-wider mr-1">
-              Быстро:
+              Сервисы
             </span>
             {quickSources.map((src) => (
               <button
@@ -202,8 +207,7 @@ export default function SourceSwitcherModal() {
               const rawScore = cand.matchScore ?? 85;
               const scorePct = Math.min(100, Math.round(rawScore > 1 ? rawScore : rawScore * 100));
               const isActive =
-                currentTrack?.id === cand.id ||
-                (currentTrack?.id === sourceSwitcherTrack.id && resolvedSourceId === cand.source);
+                currentTrack?.id === cand.id && resolvedSourceId === cand.source;
 
               return (
                 <button

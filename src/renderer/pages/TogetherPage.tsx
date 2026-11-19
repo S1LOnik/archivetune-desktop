@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Users, Radio, Send, LogOut, Copy, Link2 } from 'lucide-react';
+import { Radio, Send, LogOut, Copy, Link2 } from 'lucide-react';
 import { useAccountsStore, usePlayerStore, useUIStore } from '../store';
 
 export default function TogetherPage() {
@@ -47,22 +47,16 @@ export default function TogetherPage() {
   };
 
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-2xl font-black text-on-surface flex items-center gap-2.5">
-          <Users className="text-primary" size={26} />
-          Listen Together — Совместное прослушивание
-        </h1>
-        <p className="text-xs text-on-surface-variant mt-1">
-          Синхронизация воспроизведения в реальном времени по WebSocket (Host / Guest) с учётом пинга
-        </p>
-      </div>
+    <div className="screen screen-settings">
+      <header className="screen-header">
+        <h1>Слушать вместе</h1>
+      </header>
 
       {together.role === 'idle' ? (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           <div className="p-5 rounded-3xl bg-surface-container   space-y-4">
             <h2 className="text-base font-bold text-on-surface flex items-center gap-2">
-              <Radio size={17} className="text-primary" /> Создать комнату (Host)
+              <Radio size={17} className="text-primary" /> Создать комнату
             </h2>
             <div className="space-y-2.5 text-xs">
               <input

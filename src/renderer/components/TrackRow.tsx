@@ -1,5 +1,5 @@
 import React from 'react';
-import { Play, Pause, Plus, Heart, MoreVertical } from 'lucide-react';
+import { Play, Pause, Loader2, Plus, Heart, MoreVertical } from 'lucide-react';
 import { usePlayerStore, useUIStore } from '../store';
 import { usePlayer } from '../lib/usePlayer';
 import type { Track } from '../types/electron';
@@ -18,22 +18,23 @@ interface Props {
   queue?: Track[];
 }
 
-export default function TrackRow({ track, index = 0, showIndex = false, queue }: Props) {
-  const { currentTrack, isPlaying, setQueue, addToQueue, isTrackLiked } = usePlayerStore();
-  const { setContextMenu, pushToast } = useUIStore();
-  const { playTrack, pause, resume, toggleLikeCurrent } = usePlayer();
-
-  const isActive = currentTrack?.id === track.id;
-  const liked = isTrackLiked(track);
+export default React.memo(function TrackRow({ track, index = 0, showIndex = false, queue }: Props) {
+  const isActive = usePlayerStore((state) => state.currentTrack?.id === track.id);
+  const isPlaying = usePlayerStore((state) => state.currentTrack?.id === track.id && state.isPlaying);
+  const isLoading = usePlayerStore((state) => state.loading && state.currentTrack?.id === track.id);
+  const liked = usePlayerStore((state) => state.isTrackLiked(track));
+  const { addToQueue } = usePlayerStore.getState();
+  const { setContextMenu, pushToast } = useUIStore.getState();
+  const { playTrack, playFromQueue, pause, resume, toggleLikeCurrent } = usePlayer();
 
   const handleClick = async () => {
+    if (isLoading) return;
     if (isActive) {
       if (isPlaying) await pause();
       else await resume();
+    } else if (queue) {
+      await playFromQueue(queue, index);
     } else {
-      if (queue) {
-        setQueue(queue, index);
-      }
       await playTrack(track);
     }
   };
@@ -53,14 +54,17 @@ export default function TrackRow({ track, index = 0, showIndex = false, queue }:
     <div
       onClick={handleClick}
       onContextMenu={openMenu}
-      className={`group flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-colors ${
+      aria-busy={isLoading || undefined}
+      className={`track-row group flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-colors ${
         isActive
           ? 'bg-primary/15 text-primary'
           : 'hover:bg-surface-container-high text-on-surface'
       }`}
     >
       <div className="w-6 text-center flex-shrink-0">
-        {isActive ? (
+        {isLoading ? (
+          <Loader2 size={14} className="mx-auto text-primary animate-spin playback-spinner" aria-label="Запускаем трек" />
+        ) : isActive ? (
           isPlaying ? (
             <Pause size={14} className="mx-auto text-primary" />
           ) : (
@@ -85,7 +89,7 @@ export default function TrackRow({ track, index = 0, showIndex = false, queue }:
 
       <div className="w-10 h-10 rounded-lg overflow-hidden bg-surface-container-high flex-shrink-0">
         {track.thumbnail ? (
-          <img src={track.thumbnail} alt={track.title} className="w-full h-full object-cover" />
+          <img loading="lazy" decoding="async" src={track.thumbnail} alt={track.title} className="w-full h-full object-cover" />
         ) : (
           <div className="w-full h-full flex items-center justify-center text-lg">🎵</div>
         )}
@@ -131,7 +135,7 @@ export default function TrackRow({ track, index = 0, showIndex = false, queue }:
             ? 'text-pink-400 opacity-100'
             : 'text-on-surface-variant opacity-0 group-hover:opacity-100 hover:text-on-surface'
         }`}
-        title={liked ? 'Убрать из Любимых' : 'В Любимые'}
+        title={liked ? 'Убрать из любимых' : 'Добавить в любимые'}
       >
         <Heart size={14} fill={liked ? 'currentColor' : 'none'} />
       </button>
@@ -157,4 +161,4 @@ export default function TrackRow({ track, index = 0, showIndex = false, queue }:
       </button>
     </div>
   );
-}
+});

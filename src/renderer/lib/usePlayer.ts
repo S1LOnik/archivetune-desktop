@@ -8,15 +8,15 @@ import {
   usePlayerStore,
   useUIStore,
   useAccountsStore,
-  extractDominantColorFromImage,
 } from '../store';
 import type { Track, AudioSourceId } from '../types/electron';
 
-async function resolveTrackStreamUrlUncached(
+async function resolveTrackStreamUrl(
   track: Track,
   forceSource?: AudioSourceId
 ): Promise<{
   url: string;
+  spotifyId?: string;
   headers?: Record<string, string>;
   badge: string;
   actualSource: AudioSourceId | 'local';
@@ -46,6 +46,7 @@ async function resolveTrackStreamUrlUncached(
       duration: track.duration,
       source: track.source,
       path: track.path,
+      spotifyUri: track.spotifyUri,
     },
     forceSource
   );
@@ -53,6 +54,7 @@ async function resolveTrackStreamUrlUncached(
   if (uni.streamUrl) {
     return {
       url: uni.streamUrl,
+      spotifyId: uni.spotifyId,
       headers: uni.headers,
       badge: `${uni.actualSource.toUpperCase()} • ${uni.qualityLabel}`,
       actualSource: uni.actualSource,
@@ -62,53 +64,24 @@ async function resolveTrackStreamUrlUncached(
     };
   }
 
-  // Fallback direct YouTube extraction
-  const cleanId = track.id.replace(/^youtube:/, '');
-  if (!forceSource && cleanId.length === 11 && !cleanId.includes(':')) {
-    const directUrl = await api.ytmusic.getStreamUrl(cleanId);
-    if (directUrl) {
-      return {
-        url: directUrl,
-        badge: 'YOUTUBE • Opus',
-        actualSource: 'youtube',
-        lossless: false,
-        switched: track.source !== 'youtube',
-      };
-    }
-  }
-
   throw new Error(uni.error || 'Could not resolve valid audio stream');
-}
-
-type ResolvedTrack = Awaited<ReturnType<typeof resolveTrackStreamUrlUncached>>;
-const resolvedTracks = new Map<string, { value: Promise<ResolvedTrack>; expires: number }>();
-async function resolveTrackStreamUrl(track: Track, forceSource?: AudioSourceId): Promise<ResolvedTrack> {
-  if (!forceSource) {
-    const offline = await window.electronAPI.offline?.find(track.id);
-    if (offline) return { url: offline.filePath, badge: 'ОФЛАЙН • На устройстве', actualSource: 'local', lossless: false, switched: false };
-  }
-  if (forceSource || track.source === 'local') return resolveTrackStreamUrlUncached(track, forceSource);
-  const key = `${track.source}:${track.id}:${track.title}:${track.artist}`;
-  const cached = resolvedTracks.get(key);
-  if (cached && cached.expires > Date.now()) return cached.value;
-  const value = resolveTrackStreamUrlUncached(track).catch((error) => {
-    if (resolvedTracks.get(key)?.value === value) resolvedTracks.delete(key);
-    throw error;
-  });
-  if (resolvedTracks.size >= 100) resolvedTracks.delete(resolvedTracks.keys().next().value!);
-  resolvedTracks.set(key, { value, expires: Date.now() + 5 * 60 * 1000 });
-  return value;
 }
 
 let prebufferGeneration = 0;
 let playbackGeneration = 0;
+let pendingPlaybackTrackId: string | null = null;
 let playPauseChain = Promise.resolve();
+let playbackCommandRevision = 0;
 async function prebufferUpcomingTrackInQueue(): Promise<void> {
   const generation = ++prebufferGeneration;
   const api = window.electronAPI;
   if (!api) return;
 
-  const { queue, queueIndex, repeat } = usePlayerStore.getState();
+  const { queue, queueIndex, repeat, prebufferNextTrack, resolvedSourceId, isPlaying } = usePlayerStore.getState();
+  if (!prebufferNextTrack || repeat === 'one') {
+    await api.player.prebufferNext(null);
+    return;
+  }
   if (queue.length === 0) {
     await api.player.prebufferNext(null);
     return;
@@ -125,6 +98,13 @@ async function prebufferUpcomingTrackInQueue(): Promise<void> {
 
   const nextTrack = queue[nextIdx];
   if (!nextTrack) return;
+  const nextUsesSpotify = nextTrack.source === 'spotify' || Boolean(nextTrack.spotifyUri)
+    || /^(spotify:|https:\/\/open\.spotify\.com\/)/.test(nextTrack.id);
+  // Open the next native track only after the current native session is playing.
+  if (nextUsesSpotify && (!isPlaying || resolvedSourceId !== 'spotify')) {
+    await api.player.prebufferNext(null);
+    return;
+  }
 
   try {
     const resolved = await resolveTrackStreamUrl(nextTrack);
@@ -139,6 +119,9 @@ async function prebufferUpcomingTrackInQueue(): Promise<void> {
         album: nextTrack.album,
         duration: nextTrack.duration,
         source: resolved.actualSource,
+        originalSource: nextTrack.source,
+        spotifyUri: nextTrack.spotifyUri,
+        spotifyId: resolved.spotifyId,
         thumbnail: nextTrack.thumbnail,
       },
     });
@@ -147,13 +130,14 @@ async function prebufferUpcomingTrackInQueue(): Promise<void> {
   }
 }
 
+function showPlaybackFeedback() {
+  usePlayerStore.setState((state) => ({
+    playbackStartAt: Math.max(performance.now(), state.playbackStartAt + 0.1),
+  }));
+}
+
 export function usePlayer() {
   const {
-    currentTrack,
-    queue,
-    queueIndex,
-    isPlaying,
-    volume,
     setCurrentTrack,
     setIsPlaying,
     setPosition,
@@ -163,10 +147,10 @@ export function usePlayer() {
     setResolvedStreamMeta,
     nextTrack,
     prevTrack,
-  } = usePlayerStore();
+  } = usePlayerStore.getState();
 
   const playTrack = useCallback(
-    async (track: Track, forceSource?: AudioSourceId) => {
+    async (track: Track, forceSource?: AudioSourceId, showFeedback = true) => {
       const api = window.electronAPI;
       if (!api) return;
 
@@ -174,12 +158,18 @@ export function usePlayer() {
       const ui = useUIStore.getState();
 
       // Prevent duplicate concurrent play of same track unless explicit forceSource switch
-      if (!forceSource && store.loading && store.currentTrack?.id === track.id) return;
+      if (!forceSource && pendingPlaybackTrackId === track.id) return;
 
+      ++playbackCommandRevision;
       const generation = ++playbackGeneration;
+      pendingPlaybackTrackId = track.id;
       ++prebufferGeneration;
       setLoading(true);
       setCurrentTrack(track);
+      setIsPlaying(false);
+      if (showFeedback) showPlaybackFeedback();
+      const pausePrevious = api.player.pause().catch(() => {});
+      void api.desktop?.updatePresence({ id: track.id, title: track.title, artist: track.artist, album: track.album, duration: track.duration, position: 0, isPlaying: false, thumbnail: track.thumbnail }).catch(() => {});
       // Use the saved cover before asking a CDN; apply artwork only to the current request.
       void (async () => {
         const saved = await api.offline?.find(track.id).catch(() => null);
@@ -188,18 +178,14 @@ export function usePlayer() {
         if (thumbnail && thumbnail !== track.thumbnail) {
           usePlayerStore.setState(state => ({ currentTrack: state.currentTrack ? { ...state.currentTrack, thumbnail } : null }));
         }
-        if (ui.dynamicColorFromArt && thumbnail) {
-          const hex = await extractDominantColorFromImage(thumbnail);
-          if (generation === playbackGeneration) useUIStore.getState().setActiveArtColor(hex);
-        }
       })();
-      store.addToHistory(track);
-      setResolvedStreamMeta(forceSource ? `Switching to ${forceSource.toUpperCase()}...` : 'Resolving best stream...', track.source, false);
+      setResolvedStreamMeta(forceSource ? `Подключаем ${forceSource.toUpperCase()}…` : 'Ищем аудиопоток…', null, false);
 
       try {
         const resolved = await resolveTrackStreamUrl(track, forceSource);
+        await pausePrevious;
         if (generation !== playbackGeneration) return;
-        setResolvedStreamMeta(resolved.badge, resolved.actualSource, resolved.lossless);
+        setResolvedStreamMeta(resolved.badge, resolved.actualSource, resolved.lossless, resolved.spotifyId);
 
         if (ui.showSmartSwitchToasts && resolved.switched && resolved.switchedReason) {
           ui.pushToast(
@@ -217,8 +203,12 @@ export function usePlayer() {
           album: track.album,
           duration: track.duration,
           source: resolved.actualSource,
+          originalSource: track.source,
+          spotifyUri: track.spotifyUri,
+          spotifyId: resolved.spotifyId,
           thumbnail: track.thumbnail,
           headers: resolved.headers,
+          strictSource: Boolean(forceSource),
         });
 
         if (generation !== playbackGeneration) return;
@@ -226,12 +216,14 @@ export function usePlayer() {
           throw new Error(res.error || 'mpv failed to start stream');
         }
 
+        store.addToHistory(track);
         setIsPlaying(true);
         setTrackStartTimeSec(Date.now() / 1000);
         if (track.duration) setDuration(track.duration);
 
         // Scrobbling & OS Presence + Stats
         const presencePayload = {
+          id: track.id,
           title: track.title,
           artist: track.artist,
           album: track.album,
@@ -253,17 +245,18 @@ export function usePlayer() {
           api.together?.syncHostState({ track, position: 0, isPlaying: true }).catch(() => {});
         }
 
-        // Prebuffer next track for Dual-Deck Smart DJ Automix / Gapless
-        setTimeout(() => void prebufferUpcomingTrackInQueue(), 700);
+        void prebufferUpcomingTrackInQueue();
       } catch (err: any) {
         if (generation !== playbackGeneration) return;
-        resolvedTracks.delete(`${track.source}:${track.id}:${track.title}:${track.artist}`);
         console.error('Playback error:', err);
         useUIStore.getState().pushToast(`Ошибка воспроизведения: ${err?.message || 'Поток недоступен'}`, 'error');
-        setResolvedStreamMeta('Stream Unavailable', track.source, false);
+        setResolvedStreamMeta('Поток недоступен', null, false);
         setIsPlaying(false);
       } finally {
-        if (generation === playbackGeneration) setLoading(false);
+        if (generation === playbackGeneration) {
+          pendingPlaybackTrackId = null;
+          setLoading(false);
+        }
       }
     },
     [
@@ -279,7 +272,7 @@ export function usePlayer() {
   const playFromQueue = useCallback(
     async (tracks: Track[], index = 0) => {
       usePlayerStore.getState().setQueue(tracks, index);
-      const track = usePlayerStore.getState().queue[index] || tracks[index];
+      const track = usePlayerStore.getState().currentTrack;
       if (track) await playTrack(track);
     },
     [playTrack]
@@ -291,35 +284,69 @@ export function usePlayer() {
       const ui = useUIStore.getState();
       if (!api) return;
       ui.pushToast(`Запуск радио по "${seedTrack.title}"...`, 'info');
+      usePlayerStore.getState().setQueue([seedTrack], 0);
+      const radioQueue = usePlayerStore.getState().queue;
+      const playback = playTrack(seedTrack);
       try {
         let radioTracks: Track[] = [];
         const cleanId = seedTrack.id.replace(/^youtube:/, '');
-        if (cleanId.length === 11 && !cleanId.includes(':')) {
-          radioTracks = await api.ytmusic.getSuggested(cleanId);
+        let videoId = seedTrack.source === 'youtube' && cleanId.length === 11 ? cleanId : '';
+        if (!videoId) {
+          const matches = await api.ytmusic.search(`${seedTrack.artist} ${seedTrack.title}`).catch(() => []);
+          const normalize = (value: string) => value.toLocaleLowerCase().normalize('NFKC').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+          const title = normalize(seedTrack.title);
+          const artist = normalize(seedTrack.artist);
+          const match = matches.find((candidate) => {
+            const candidateTitle = normalize(candidate.title || '');
+            const candidateArtist = normalize(candidate.artist || '');
+            const titleMatches = title.length > 0 && (candidateTitle.includes(title) || title.includes(candidateTitle) && candidateTitle.length >= 5);
+            const artistMatches = artist.length > 0 && (candidateArtist.includes(artist) || candidateTitle.includes(artist));
+            const durationMatches = !seedTrack.duration || (candidate.duration > 0 && Math.abs(seedTrack.duration - candidate.duration) <= 20);
+            const versionMatches = ['remix', 'nightcore', 'slowed', 'sped up', 'live', 'cover', 'hardstyle'].every((version) =>
+              title.includes(version) === candidateTitle.includes(version));
+            return titleMatches && artistMatches && durationMatches && versionMatches;
+          });
+          videoId = match?.id?.replace(/^youtube:/, '') || '';
         }
+        if (videoId.length === 11) radioTracks = await api.ytmusic.getSuggested(videoId).catch(() => []);
         if (radioTracks.length < 4) {
           const searchRes = await api.ytmusic.search(`${seedTrack.artist} mix`);
           radioTracks = [...radioTracks, ...searchRes];
         }
-        const unique = [
-          seedTrack,
-          ...radioTracks.filter((t) => t.id !== seedTrack.id),
-        ].slice(0, 25);
-        await playFromQueue(unique, 0);
+        const state = usePlayerStore.getState();
+        if (state.queue !== radioQueue || state.currentTrack?.id !== seedTrack.id) return;
+        const seen = new Set([seedTrack.id, videoId]);
+        for (const track of radioTracks) {
+          if (!track.id || seen.has(track.id)) continue;
+          seen.add(track.id);
+          state.addToQueue(track);
+          if (seen.size >= 26) break;
+        }
+        // If the seed is still opening, playTrack will prebuffer after it starts.
+        if (usePlayerStore.getState().isPlaying) void prebufferUpcomingTrackInQueue();
+        await playback;
       } catch {
-        await playFromQueue([seedTrack], 0);
+        await playback;
       }
     },
-    [playFromQueue]
+    [playTrack]
   );
 
   const pause = useCallback(() => {
+    const commandRevision = ++playbackCommandRevision;
+    ++playbackGeneration;
+    pendingPlaybackTrackId = null;
+    ++prebufferGeneration;
+    setLoading(false);
     setIsPlaying(false);
     playPauseChain = playPauseChain.then(async () => {
+      if (commandRevision !== playbackCommandRevision) return;
       await window.electronAPI?.player.pause();
+      if (commandRevision !== playbackCommandRevision) return;
       const t = usePlayerStore.getState().currentTrack;
       if (t) {
         window.electronAPI?.desktop?.updatePresence({
+          id: t.id,
           title: t.title,
           artist: t.artist,
           album: t.album,
@@ -334,20 +361,24 @@ export function usePlayer() {
       }
     }).catch(() => {});
     return playPauseChain;
-  }, [setIsPlaying]);
+  }, [setIsPlaying, setLoading]);
 
   const resume = useCallback(() => {
+    const commandRevision = ++playbackCommandRevision;
+    if (usePlayerStore.getState().currentTrack) showPlaybackFeedback();
     setIsPlaying(true);
     playPauseChain = playPauseChain.then(async () => {
       const state = usePlayerStore.getState();
       const st = await window.electronAPI?.player.getStatus();
-      if (!st?.currentUrl && state.currentTrack) {
-        await playTrack(state.currentTrack);
+      if (commandRevision !== playbackCommandRevision) return;
+      if (state.currentTrack && (!st?.currentUrl || st.currentTrackId !== state.currentTrack.id)) {
+        void playTrack(state.currentTrack, undefined, false);
         return;
       }
       await window.electronAPI?.player.resume();
       if (state.currentTrack) {
         window.electronAPI?.desktop?.updatePresence({
+          id: state.currentTrack.id,
           title: state.currentTrack.title,
           artist: state.currentTrack.artist,
           album: state.currentTrack.album,
@@ -368,6 +399,7 @@ export function usePlayer() {
     async (seconds: number) => {
       setPosition(seconds);
       await window.electronAPI?.player.seek(seconds);
+      window.electronAPI?.desktop?.updatePosition(seconds, true);
       if (useAccountsStore.getState().together.role === 'host') {
         window.electronAPI?.together?.syncHostState({ position: seconds });
       }
@@ -386,12 +418,9 @@ export function usePlayer() {
       await playTrack(next);
     } else {
       const state = usePlayerStore.getState();
-      if (state.currentTrack) {
-        const db = await window.electronAPI?.db?.getInitialState?.().catch(() => null);
-        if (db?.settings?.autoRadioOnQueueEnd !== false) {
-          await startRadio(state.currentTrack);
-          return;
-        }
+      if (state.currentTrack && state.autoRadioOnQueueEnd) {
+        await startRadio(state.currentTrack);
+        return;
       }
       await window.electronAPI?.player.stop();
       setIsPlaying(false);
@@ -422,31 +451,16 @@ export function usePlayer() {
     usePlayerStore.getState().setDspOption({ normalization: next });
   }, []);
 
-  const downloadCurrentTrack = useCallback(async (format?: 'mp3' | 'flac' | 'opus') => {
-    const t = usePlayerStore.getState().currentTrack;
-    if (!t) return { ok: false, error: 'No track active' };
-    if (format) useUIStore.getState().setDesktopSetting({ downloadFormat: format });
-    const uni = await window.electronAPI.providers.resolveUniversal({
-      id: t.id,
-      title: t.title,
-      artist: t.artist,
-      album: t.album,
-      duration: t.duration,
-      source: t.source,
-      path: t.path,
-    });
-    return window.electronAPI.player.downloadTrack({
-      ...t,
-      streamUrl: uni.streamUrl || undefined,
-    });
-  }, []);
+  const downloadCurrentTrack = useCallback(
+    async (format?: 'mp3' | 'flac' | 'opus', lrc?: string) => {
+      const t = usePlayerStore.getState().currentTrack;
+      if (!t) return { ok: false, error: 'Нет активного трека' };
+      return window.electronAPI.player.downloadTrack({ ...t, format, lrc });
+    },
+    []
+  );
 
   return {
-    currentTrack,
-    queue,
-    queueIndex,
-    isPlaying,
-    volume,
     playTrack,
     playFromQueue,
     startRadio,
@@ -473,29 +487,44 @@ export function usePlayerEvents() {
     if (!api) return;
 
     let lastStatsTick = 0;
+    let lastSystemPositionTick = 0;
+    const publishMode = () => { const { shuffle, repeat } = usePlayerStore.getState(); api.desktop?.updatePlaybackMode({ shuffle, repeat }); };
+    publishMode();
+    const unsubMode = usePlayerStore.subscribe((state, previous) => {
+      if (state.shuffle !== previous.shuffle || state.repeat !== previous.repeat) publishMode();
+    });
+    const unsubSystemMode = api.desktop?.onPlaybackMode(mode => {
+      const state = usePlayerStore.getState();
+      if (typeof mode.shuffle === 'boolean' && mode.shuffle !== state.shuffle) state.toggleShuffle();
+      if (mode.repeat && mode.repeat !== state.repeat) state.setRepeat(mode.repeat);
+    });
+    const unsubRepeat = usePlayerStore.subscribe((state, previous) => {
+      if (state.repeat !== previous.repeat) void prebufferUpcomingTrackInQueue();
+    });
 
     const unsubRecovery = api.player.onRecovery?.((info) => {
       const store = usePlayerStore.getState();
       if (store.currentTrack?.id !== info.trackId) return;
       store.setLoading(info.loading);
       if (info.error) {
+        store.setResolvedStreamMeta('Поток недоступен', null, false);
         store.setIsPlaying(false);
         useUIStore.getState().pushToast(info.error, 'error');
       } else if (info.badge && info.source) {
-        store.setResolvedStreamMeta(info.badge, info.source as AudioSourceId, Boolean(info.lossless));
+        store.setResolvedStreamMeta(info.badge, info.source as AudioSourceId, Boolean(info.lossless), info.spotifyId);
         store.setIsPlaying(true);
       }
     });
     const unsubProgress = api.player.onProgress((info) => {
       const store = usePlayerStore.getState();
-      if (!store.isScrubbing) {
-        store.setPosition(info.position);
-      }
-      if (info.duration > 0) store.setDuration(info.duration);
-      store.setAutomixing(Boolean(info.automixing));
-      if (info.automixPlan !== undefined) {
-        store.setAutomixPlan(info.automixPlan ?? null);
-      }
+      if (info.trackId && info.trackId !== store.currentTrack?.id) return;
+      if (Date.now() - lastSystemPositionTick >= 1000) { api.desktop?.updatePosition(info.position); lastSystemPositionTick = Date.now(); }
+      const update: Partial<typeof store> = {};
+      if (info.position !== store.position) update.position = info.position;
+      if (info.duration > 0 && info.duration !== store.duration) update.duration = info.duration;
+      const automixing = Boolean(info.automixing);
+      if (automixing !== store.automixing) update.automixing = automixing;
+      if (Object.keys(update).length) usePlayerStore.setState(update);
 
       const track = store.currentTrack;
       if (track && info.isPlaying) {
@@ -529,22 +558,21 @@ export function usePlayerEvents() {
     });
 
     const unsubEnded = api.player.onEnded(() => {
-      void skipNext();
+      const state = usePlayerStore.getState();
+      if (state.repeat === 'one' && state.currentTrack) void playTrack(state.currentTrack);
+      else void skipNext();
     });
 
-    const unsubAutomix = api.player.onAutomixTransition(({ nextTrackId }) => {
+    const unsubAutomix = api.player.onAutomixTransition(({ nextTrackId, spotifyId }) => {
       const store = usePlayerStore.getState();
       const idx = store.queue.findIndex((t) => t.id === nextTrackId);
       if (idx >= 0) {
         const nextT = store.queue[idx];
-        usePlayerStore.setState({ queueIndex: idx, currentTrack: nextT, position: 0 });
+        usePlayerStore.setState({ queueIndex: idx, currentTrack: nextT, position: 0, automixPlan: null,
+          resolvedSpotifyTrack: spotifyId ? { trackId: nextTrackId, spotifyId } : undefined });
         store.addToHistory(nextT);
-        if (useUIStore.getState().dynamicColorFromArt && nextT.thumbnail) {
-          extractDominantColorFromImage(nextT.thumbnail).then((hex) => {
-            useUIStore.getState().setActiveArtColor(hex);
-          }).catch(() => {});
-        }
         api.desktop?.updatePresence({
+          id: nextT.id,
           title: nextT.title,
           artist: nextT.artist,
           album: nextT.album,
@@ -572,8 +600,16 @@ export function usePlayerEvents() {
     const unsubShortcut = api.onMediaShortcut((action) => {
       const { isPlaying } = usePlayerStore.getState();
       if (action === 'playPause') void (isPlaying ? pause() : resume());
+      else if (action === 'play' && !isPlaying) void resume();
+      else if (action === 'pause' && isPlaying) void pause();
       else if (action === 'next') void skipNext();
       else if (action === 'prev') void skipPrev();
+    });
+
+    const unsubMediaSeek = api.onMediaSeek((event) => {
+      const state = usePlayerStore.getState();
+      const target = typeof event.position === 'number' ? event.position : state.position + (event.offset || 0);
+      void seek(Math.max(0, Math.min(state.duration || Infinity, target)));
     });
 
     const unsubMiniMode = api.onMiniModeChanged((isMini) => {
@@ -650,6 +686,10 @@ export function usePlayerEvents() {
       unsubToast?.();
       unsubSleep?.();
       unsubShortcut();
+      unsubMediaSeek();
+      unsubRepeat();
+      unsubMode();
+      unsubSystemMode?.();
       unsubMiniMode();
       unsubTogetherState?.();
       unsubTogetherSync?.();
