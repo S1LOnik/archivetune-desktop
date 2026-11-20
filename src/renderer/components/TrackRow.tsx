@@ -22,20 +22,41 @@ export default React.memo(function TrackRow({ track, index = 0, showIndex = fals
   const isActive = usePlayerStore((state) => state.currentTrack?.id === track.id);
   const isPlaying = usePlayerStore((state) => state.currentTrack?.id === track.id && state.isPlaying);
   const isLoading = usePlayerStore((state) => state.loading && state.currentTrack?.id === track.id);
+  const hasError = usePlayerStore((state) => Boolean(state.playbackError) && state.currentTrack?.id === track.id && !state.loading);
   const liked = usePlayerStore((state) => state.isTrackLiked(track));
   const { addToQueue } = usePlayerStore.getState();
   const { setContextMenu, pushToast } = useUIStore.getState();
-  const { playTrack, playFromQueue, pause, resume, toggleLikeCurrent } = usePlayer();
+  const { playTrack, retryCurrentTrack, playFromQueue, pause, resume, toggleLikeCurrent } = usePlayer();
 
   const handleClick = async () => {
     if (isLoading) return;
-    if (isActive) {
+    if (isActive && hasError) {
+      await retryCurrentTrack();
+    } else if (isActive) {
       if (isPlaying) await pause();
       else await resume();
     } else if (queue) {
       await playFromQueue(queue, index);
     } else {
       await playTrack(track);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.target !== e.currentTarget) return;
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      void handleClick();
+    } else if (e.key === ' ') {
+      e.preventDefault();
+    }
+  };
+
+  const handleKeyUp = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.target !== e.currentTarget) return;
+    if (e.key === ' ') {
+      e.preventDefault();
+      void handleClick();
     }
   };
 
@@ -52,9 +73,14 @@ export default React.memo(function TrackRow({ track, index = 0, showIndex = fals
 
   return (
     <div
+      role="button"
+      tabIndex={0}
       onClick={handleClick}
+      onKeyDown={handleKeyDown}
+      onKeyUp={handleKeyUp}
       onContextMenu={openMenu}
       aria-busy={isLoading || undefined}
+      aria-label={`${track.title} — ${track.artist}`}
       className={`track-row group flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-colors ${
         isActive
           ? 'bg-primary/15 text-primary'
@@ -100,7 +126,15 @@ export default React.memo(function TrackRow({ track, index = 0, showIndex = fals
           <p className={`text-sm font-semibold truncate ${isActive ? 'text-primary' : 'text-on-surface'}`}>
             {track.title}
           </p>
-          {badgeText && (
+          {isLoading ? (
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0 bg-primary/20 text-primary">
+              Запуск…
+            </span>
+          ) : hasError ? (
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0 bg-red-500/20 text-red-300">
+              Ошибка · повторить
+            </span>
+          ) : badgeText ? (
             <span
               className={`text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0 uppercase ${
                 track.lossless
@@ -110,7 +144,7 @@ export default React.memo(function TrackRow({ track, index = 0, showIndex = fals
             >
               {badgeText}
             </span>
-          )}
+          ) : null}
         </div>
         <p className="text-xs text-on-surface-variant truncate">{track.artist}</p>
       </div>

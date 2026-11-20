@@ -1266,7 +1266,6 @@ export default function SettingsPage() {
             <div className="p-2 rounded-lg bg-surface-container-high"><strong className="text-primary">J / L</strong> — Перемотка ±10 сек</div>
             <div className="p-2 rounded-lg bg-surface-container-high"><strong className="text-primary">M</strong> — Mute / Звук</div>
             <div className="p-2 rounded-lg bg-surface-container-high"><strong className="text-primary">Ctrl+Q</strong> — Очередь</div>
-            <div className="p-2 rounded-lg bg-surface-container-high"><strong className="text-primary">Ctrl+M</strong> — Мини-виджет PiP</div>
           </div>
         </div>
       </section>

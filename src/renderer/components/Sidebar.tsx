@@ -12,7 +12,6 @@ import {
   BarChart3,
   PlugZap,
   ListMusic,
-  PictureInPicture2,
   Sparkles,
 } from 'lucide-react';
 import { useAccountsStore, usePlayerStore, useUIStore } from '../store';
@@ -123,7 +122,7 @@ export default function Sidebar() {
       </nav>
 
       {/* Bottom Desktop Quick Actions */}
-      <div className="px-3 pt-3 space-y-1.5">
+      <div className="px-3 pt-3">
         <motion.button whileHover={hover} whileTap={press} transition={controlTransition}
           onClick={toggleQueueDrawer}
           className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-2xl text-xs font-semibold transition-all shadow-sm ${
@@ -136,12 +135,6 @@ export default function Sidebar() {
             <ListMusic size={15} /> Очередь
           </span>
           <span className="px-1.5 py-0.5 rounded-full bg-surface-container-highest text-[10px] font-bold">{queueLen}</span>
-        </motion.button>
-        <motion.button whileHover={hover} whileTap={press} transition={controlTransition}
-          onClick={() => void window.electronAPI?.toggleMiniMode?.()}
-          className="w-full flex items-center gap-2 px-3.5 py-2 rounded-2xl text-xs font-semibold text-on-surface-variant hover:bg-surface-container-high/60 hover:text-on-surface transition"
-        >
-          <PictureInPicture2 size={15} /> Мини-плеер (Ctrl+M)
         </motion.button>
       </div>
     </aside>

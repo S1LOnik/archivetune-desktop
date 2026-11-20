@@ -71,6 +71,8 @@ interface PlayerState {
   repeat: 'none' | 'one' | 'all';
   shuffle: boolean;
   loading: boolean;
+  loadingStage: 'idle' | 'resolving' | 'buffering' | 'slow';
+  playbackError: string | null;
   playbackStartAt: number;
   speed: number;
   pitchSemitones: number;
@@ -132,6 +134,8 @@ interface PlayerState {
   setRepeat: (mode: 'none' | 'one' | 'all') => void;
   toggleShuffle: () => void;
   setLoading: (loading: boolean) => void;
+  setLoadingStage: (stage: 'idle' | 'resolving' | 'buffering' | 'slow') => void;
+  setPlaybackError: (error: string | null) => void;
   setSpeed: (speed: number) => void;
   setDspOption: (opts: Partial<AppSettings>) => void;
   setCrossfade: (seconds: number) => void;
@@ -194,6 +198,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   repeat: 'none',
   shuffle: false,
   loading: false,
+  loadingStage: 'idle',
+  playbackError: null,
   playbackStartAt: 0,
   speed: 1.0,
   pitchSemitones: 0,
@@ -238,7 +244,16 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   aiContentFilter: false,
 
   setCurrentTrack: (track) => {
-    set({ currentTrack: track, resolvedSpotifyTrack: undefined, position: 0, automixPlan: null, abLoopA: null, abLoopB: null });
+    set({
+      currentTrack: track,
+      resolvedSpotifyTrack: undefined,
+      position: 0,
+      duration: track.duration || 0,
+      playbackError: null,
+      automixPlan: null,
+      abLoopA: null,
+      abLoopB: null,
+    });
     window.electronAPI?.player?.setAbLoop?.(null, null);
     persistQueueState(get());
   },
@@ -403,6 +418,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
 
   setLoading: (loading) => set({ loading }),
+  setLoadingStage: (loadingStage) => set({ loadingStage }),
+  setPlaybackError: (playbackError) => set({ playbackError }),
 
   setSpeed: (speed) => {
     set({ speed });
@@ -905,7 +922,6 @@ interface UIState {
   visualizerEnabled: boolean;
   visualizerStyle: 'bars' | 'wave' | 'circular';
   showNowPlaying: boolean;
-  isMiniPipMode: boolean;
   queueDrawerOpen: boolean;
   sidebarCollapsed: boolean;
   toasts: SmartToast[];
@@ -937,7 +953,6 @@ interface UIState {
   setAppearance: (settings: Partial<Pick<AppSettings, 'ambientBackgroundBlur' | 'compactTrackRows' | 'glassEffect' | 'reduceInterfaceMotion' | 'interfaceMotionPreset'>>, persist?: boolean) => void;
   setVisualizer: (enabled: boolean, style?: 'bars' | 'wave' | 'circular') => void;
   setShowNowPlaying: (v: boolean) => void;
-  setMiniPipMode: (v: boolean) => void;
   toggleQueueDrawer: () => void;
   setQueueDrawerOpen: (v: boolean) => void;
   toggleSidebar: () => void;
@@ -1025,7 +1040,6 @@ export const useUIStore = create<UIState>((set, get) => ({
   visualizerEnabled: true,
   visualizerStyle: 'bars',
   showNowPlaying: false,
-  isMiniPipMode: false,
   queueDrawerOpen: false,
   sidebarCollapsed: false,
   toasts: [],
@@ -1104,7 +1118,6 @@ export const useUIStore = create<UIState>((set, get) => ({
   },
 
   setShowNowPlaying: (showNowPlaying) => set({ showNowPlaying }),
-  setMiniPipMode: (isMiniPipMode) => set({ isMiniPipMode }),
   toggleQueueDrawer: () => set((s) => ({ queueDrawerOpen: !s.queueDrawerOpen })),
   setQueueDrawerOpen: (queueDrawerOpen) => set({ queueDrawerOpen }),
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),

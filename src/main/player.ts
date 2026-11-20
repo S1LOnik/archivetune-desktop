@@ -20,7 +20,7 @@ import {
   auditTrackAcousticQuality,
 } from './automix';
 import { getDb, updateSettings } from './db';
-import { resolveUniversalStream } from './providers';
+import { resolveUniversalStream, cancelPrebufferResolution } from './providers';
 import { setupOfflineIPC } from './offline';
 import { getPlaybackCache, setupPlaybackCacheIPC } from './playbackCache';
 import { setupNativeSpotifyIPC } from './spotifyNative';
@@ -148,23 +148,45 @@ class DualDeckMpvPlayer {
   private recoveryRevision: number | null = null;
   private prebufferRevision = 0;
   private failedSources = new Set<string>();
+  private analysisTimer: NodeJS.Timeout | null = null;
+  private analysisController: AbortController | null = null;
+  private prebufferAnalysisController: AbortController | null = null;
 
-  private notifyRecovery(state: { loading: boolean; error?: string; source?: string; badge?: string; lossless?: boolean; spotifyId?: string }): void {
+  private cancelAnalysis(includePrebuffer = false): void {
+    if (this.analysisTimer) {
+      clearTimeout(this.analysisTimer);
+      this.analysisTimer = null;
+    }
+    this.analysisController?.abort();
+    this.analysisController = null;
+    if (includePrebuffer) {
+      this.prebufferAnalysisController?.abort();
+      this.prebufferAnalysisController = null;
+    }
+  }
+
+  private notifyRecovery(
+    revision: number,
+    trackId: string | undefined,
+    state: { loading: boolean; error?: string; source?: string; badge?: string; lossless?: boolean; spotifyId?: string }
+  ): void {
+    if (revision !== this.playbackRevision) return;
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      this.mainWindow.webContents.send('player:recovery', { ...state, trackId: this.activeMeta?.id });
+      this.mainWindow.webContents.send('player:recovery', { ...state, trackId, revision });
     }
   }
 
   private async recoverStream(revision: number, position: number): Promise<{ ok: boolean; error?: string }> {
     const meta = this.activeMeta;
+    const trackId = meta?.id;
     if (!meta || !meta.title || !meta.artist || meta.source === 'local' || meta.strictSource || this.recoveryRevision === revision) {
       if (revision === this.playbackRevision && this.recoveryRevision !== revision) {
-        this.notifyRecovery({ loading: false, error: 'Аудиопоток недоступен' });
+        this.notifyRecovery(revision, trackId, { loading: false, error: 'Аудиопоток недоступен' });
       }
       return { ok: false, error: 'Audio stream unavailable' };
     }
     this.recoveryRevision = revision;
-    this.notifyRecovery({ loading: true });
+    this.notifyRecovery(revision, trackId, { loading: true });
     try {
       this.failedSources.add(meta.source || 'youtube');
       const replacement = await resolveUniversalStream({
@@ -180,13 +202,13 @@ class DualDeckMpvPlayer {
       if (revision !== this.playbackRevision) return { ok: false, error: 'Playback cancelled' };
       if (!result.ok) throw new Error(result.error);
       if (position > 1) await this.seek(position);
-      this.notifyRecovery({ loading: false, source: replacement.actualSource,
+      this.notifyRecovery(revision, trackId, { loading: false, source: replacement.actualSource,
         badge: `${replacement.actualSource.toUpperCase()} • ${replacement.qualityLabel}`, lossless: replacement.lossless, spotifyId: replacement.spotifyId });
       return { ok: true };
     } catch (error: any) {
       if (revision === this.playbackRevision) {
         this.getActiveDeck().paused = true;
-        this.notifyRecovery({ loading: false, error: error.message });
+        this.notifyRecovery(revision, trackId, { loading: false, error: error.message });
       }
       return { ok: false, error: error.message };
     } finally {
@@ -525,6 +547,8 @@ class DualDeckMpvPlayer {
   public async play(url: string, meta: TrackPlayMeta): Promise<{ ok: boolean; error?: string }> {
     const revision = ++this.playbackRevision;
     ++this.prebufferRevision;
+    this.cancelAnalysis(true);
+    cancelPrebufferResolution();
     getPlaybackCache().cancel();
     this.failedSources.clear();
     const result = await this.playAttempt(url, meta);
@@ -585,16 +609,38 @@ class DualDeckMpvPlayer {
       await this.sendDeckCommand(active, ['set_property', 'pause', false]);
       if (revision !== this.playbackRevision) throw new Error('Playback cancelled');
 
-      // Background BPM/Spectrum analysis for Automix + SponsorBlock lookup
+      // Emit an immediate initial progress snapshot instead of waiting 250ms for the first poll tick
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.webContents.send('player:progress', {
+          trackId: active.currentTrackId,
+          position: active.position,
+          duration: active.duration,
+          isPlaying: !active.paused,
+          automixing: this.isAutomixing,
+          revision,
+        });
+      }
+
+      // Defer background BPM/Spectrum analysis so ffmpeg never contends with mpv or Spotify stream startup
       if (this.smartDjEnabled) {
-        analyzeAudioForAutomix(meta.id, url, meta.duration || 180)
-          .then((res) => {
-            if (this.activeMeta?.id === meta.id && res) {
-              this.currentAnalysis = res;
-              this.recomputePlan();
-            }
-          })
-          .catch(() => {});
+        this.cancelAnalysis(false);
+        this.analysisTimer = setTimeout(() => {
+          this.analysisTimer = null;
+          if (revision !== this.playbackRevision || this.getActiveDeck().paused) return;
+          const controller = new AbortController();
+          this.analysisController = controller;
+          analyzeAudioForAutomix(meta.id, url, meta.duration || 180, controller.signal)
+            .then((res) => {
+              if (revision === this.playbackRevision && this.activeMeta?.id === meta.id && res) {
+                this.currentAnalysis = res;
+                this.recomputePlan();
+              }
+            })
+            .catch(() => {})
+            .finally(() => {
+              if (this.analysisController === controller) this.analysisController = null;
+            });
+        }, 3000);
       }
       this.loadSponsorBlockSegments(meta.id).catch(() => {});
       this.startProgressPolling();
@@ -612,6 +658,8 @@ class DualDeckMpvPlayer {
 
   public async prebufferNext(nextData: NextQueueTrackData | null): Promise<{ ok: boolean }> {
     const revision = ++this.prebufferRevision;
+    this.prebufferAnalysisController?.abort();
+    this.prebufferAnalysisController = null;
     this.nextPrepared = nextData;
     this.nextAnalysis = null;
     const standby = this.getStandbyDeck();
@@ -619,7 +667,7 @@ class DualDeckMpvPlayer {
     if (!nextData || !getDb().settings.prebufferNextTrack) return { ok: true };
 
     await this.ensureDeckSpawned(standby);
-    if (revision !== this.prebufferRevision) return { ok: false };
+    if (revision !== this.prebufferRevision || standby !== this.getStandbyDeck()) return { ok: false };
     standby.currentUrl = nextData.url;
     standby.currentTrackId = nextData.meta.id;
     standby.paused = true;
@@ -627,28 +675,35 @@ class DualDeckMpvPlayer {
     standby.lowpassHz = undefined;
 
     await this.sendDeckCommand(standby, ['set_property', 'pause', true]);
-    if (revision !== this.prebufferRevision) return { ok: false };
+    if (revision !== this.prebufferRevision || standby !== this.getStandbyDeck()) return { ok: false };
     await this.sendDeckCommand(standby, ['set_property', 'volume', 0]);
-    if (revision !== this.prebufferRevision) return { ok: false };
+    if (revision !== this.prebufferRevision || standby !== this.getStandbyDeck()) return { ok: false };
     try {
       await this.loadDeckStream(standby, nextData.url, nextData.headers);
-      if (revision !== this.prebufferRevision) return { ok: false };
+      if (revision !== this.prebufferRevision || standby !== this.getStandbyDeck()) return { ok: false };
       await this.sendDeckCommand(standby, ['set_property', 'pause', true]);
+      if (revision !== this.prebufferRevision || standby !== this.getStandbyDeck()) return { ok: false };
       await this.sendDeckCommand(standby, ['set_property', 'time-pos', 0]);
+      if (revision !== this.prebufferRevision || standby !== this.getStandbyDeck()) return { ok: false };
       if (this.nextPrepared === nextData && standby.currentUrl === nextData.url) standby.prepared = true;
     } catch {
       return { ok: false };
     }
 
     if (this.smartDjEnabled) {
-      analyzeAudioForAutomix(nextData.meta.id, nextData.url, nextData.meta.duration || 180)
+      const controller = new AbortController();
+      this.prebufferAnalysisController = controller;
+      analyzeAudioForAutomix(nextData.meta.id, nextData.url, nextData.meta.duration || 180, controller.signal)
         .then((res) => {
-          if (this.nextPrepared?.meta.id === nextData.meta.id && res) {
+          if (revision === this.prebufferRevision && this.nextPrepared?.meta.id === nextData.meta.id && res) {
             this.nextAnalysis = res;
             this.recomputePlan();
           }
         })
-        .catch(() => {});
+        .catch(() => {})
+        .finally(() => {
+          if (this.prebufferAnalysisController === controller) this.prebufferAnalysisController = null;
+        });
     }
     return { ok: true };
   }
@@ -679,12 +734,16 @@ class DualDeckMpvPlayer {
   private handleNaturalEnd(deck: DeckInstance): void {
     if (deck !== this.getActiveDeck() || deck.paused || this.isAutomixing) return;
     deck.paused = true;
+    const endedTrackId = deck.currentTrackId;
+    const revision = this.playbackRevision;
     if (this.sleepAfterTrack) {
       this.sleepAfterTrack = false;
       this.emitSleepUpdate();
       return;
     }
-    if (this.mainWindow && !this.mainWindow.isDestroyed()) this.mainWindow.webContents.send('player:ended');
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+      this.mainWindow.webContents.send('player:ended', { trackId: endedTrackId, revision });
+    }
   }
 
   private startProgressPolling(): void {
@@ -788,6 +847,7 @@ class DualDeckMpvPlayer {
     if (!this.nextPrepared || !this.activeMeta || this.isAutomixing) return;
     if (this.sleepAfterTrack) return;
 
+    const revision = this.playbackRevision;
     this.isAutomixing = true;
     const outDeck = this.getActiveDeck();
     const inDeck = this.getStandbyDeck();
@@ -807,14 +867,17 @@ class DualDeckMpvPlayer {
     this.emitToast(`Automix: ${plan.reason}`, 'automix');
 
     await this.ensureDeckSpawned(inDeck);
+    if (revision !== this.playbackRevision) { this.cancelAutomix(); return; }
     if (inDeck.currentUrl !== inData.url) {
       await this.sendDeckCommand(inDeck, ['loadfile', inData.url, 'replace']);
       await new Promise((r) => setTimeout(r, 140));
+      if (revision !== this.playbackRevision) { this.cancelAutomix(); return; }
     }
 
     inDeck.bassCut = plan.bassSwap && plan.style !== 'GAPLESS';
     inDeck.paused = false;
     await this.applyFiltersToDeck(inDeck);
+    if (revision !== this.playbackRevision) { this.cancelAutomix(); return; }
 
     const cueSec = plan.incomingCueMs / 1000;
     if (cueSec > 0.1) await this.sendDeckCommand(inDeck, ['set_property', 'time-pos', cueSec]);
@@ -823,6 +886,7 @@ class DualDeckMpvPlayer {
     }
     await this.sendDeckCommand(inDeck, ['set_property', 'volume', plan.style === 'GAPLESS' ? this.mpvVolume() : 0]);
     await this.sendDeckCommand(inDeck, ['set_property', 'pause', false]);
+    if (revision !== this.playbackRevision) { this.cancelAutomix(); return; }
 
     const fadeMs = Math.max(150, plan.fadeMs);
     const startMs = Date.now();
@@ -830,12 +894,17 @@ class DualDeckMpvPlayer {
     const inRhythm = SmartDjAutomixManager.resolveRhythmSync(inData.meta.id, inData.meta.title, inData.meta.artist, inData.meta.bpm);
 
     this.automixInterval = setInterval(async () => {
+      if (revision !== this.playbackRevision) {
+        this.cancelAutomix();
+        return;
+      }
       const elapsed = Date.now() - startMs;
       const progress = Math.min(1, elapsed / fadeMs);
       const gains = SmartDjAutomixManager.calculateAutomixGains(progress, plan.bassSwapFraction, plan.style);
 
       await this.sendDeckCommand(outDeck, ['set_property', 'volume', this.mpvVolume(gains.outgoingGain)]);
       await this.sendDeckCommand(inDeck, ['set_property', 'volume', this.mpvVolume(gains.incomingGain)]);
+      if (revision !== this.playbackRevision) { this.cancelAutomix(); return; }
 
       if (plan.style === 'DJ_BLEND' && this.smartDjEnabled) {
         const warp = SmartDjAutomixManager.calculateTempoWarpParameters(progress, outRhythm.bpm, inRhythm.bpm);
@@ -853,7 +922,7 @@ class DualDeckMpvPlayer {
         await this.applyFiltersToDeck(inDeck);
       }
 
-      if (progress >= 1) {
+      if (progress >= 1 && revision === this.playbackRevision) {
         this.cancelAutomix();
         await this.sendDeckCommand(outDeck, ['stop']);
         outDeck.paused = true;
@@ -874,7 +943,12 @@ class DualDeckMpvPlayer {
         this.loadSponsorBlockSegments(inData.meta.id).catch(() => {});
 
         if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-          this.mainWindow.webContents.send('player:automixTransition', { nextTrackId: inData.meta.id, spotifyId: inData.meta.spotifyId });
+          this.mainWindow.webContents.send('player:automixTransition', {
+            fromTrackId: outMeta.id,
+            nextTrackId: inData.meta.id,
+            spotifyId: inData.meta.spotifyId,
+            revision,
+          });
         }
       }
     }, 65);
@@ -891,6 +965,8 @@ class DualDeckMpvPlayer {
   public async pause(): Promise<void> {
     ++this.playbackRevision;
     ++this.prebufferRevision;
+    this.cancelAnalysis(false);
+    cancelPrebufferResolution();
     this.cancelAutomix();
     const d = this.getActiveDeck();
     d.paused = true;
@@ -907,6 +983,8 @@ class DualDeckMpvPlayer {
     getPlaybackCache().cancel();
     ++this.playbackRevision;
     ++this.prebufferRevision;
+    this.cancelAnalysis(true);
+    cancelPrebufferResolution();
     this.cancelAutomix();
     this.nextPrepared = null;
     for (const id of ['A', 'B'] as const) {

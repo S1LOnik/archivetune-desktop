@@ -230,8 +230,6 @@ declare global {
       minimize: () => void;
       maximize: () => void;
       close: () => void;
-      toggleMiniMode: () => Promise<boolean>;
-      onMiniModeChanged: (cb: (isMini: boolean) => void) => () => void;
       onMediaShortcut: (cb: (action: 'playPause' | 'play' | 'pause' | 'next' | 'prev') => void) => () => void;
       updateDiscordPresence: (trackInfo: object | null) => Promise<{ ok: boolean }>;
       openExternal: (url: string) => void;
@@ -240,7 +238,7 @@ declare global {
         updatePlaybackMode: (mode: { shuffle: boolean; repeat: string }) => void;
         onPlaybackMode: (cb: (mode: { shuffle?: boolean; repeat?: 'none' | 'one' | 'all' }) => void) => () => void;
         updateLyrics: (trackId: string, lines: Array<{ time: number; text: string }>) => void;
-        updatePosition: (position: number, seeked?: boolean) => void;
+        updatePosition: (position: number, seeked?: boolean, trackId?: string) => void;
         updatePresence: (trackInfo: object | null) => Promise<{ ok: boolean }>;
         listenBrainzNowPlaying: (trackInfo: object) => Promise<{ ok: boolean }>;
         listenBrainzScrobble: (trackInfo: object) => Promise<{ ok: boolean }>;
@@ -299,8 +297,8 @@ declare global {
         getStatus: () => Promise<any>;
         onRecovery: (cb: (info: { trackId: string; loading: boolean; error?: string; source?: string; badge?: string; lossless?: boolean; spotifyId?: string }) => void) => () => void;
         onProgress: (cb: (info: any) => void) => () => void;
-        onEnded: (cb: () => void) => () => void;
-        onAutomixTransition: (cb: (info: { nextTrackId: string; spotifyId?: string }) => void) => () => void;
+        onEnded: (cb: (info?: { trackId?: string | null; revision?: number }) => void) => () => void;
+        onAutomixTransition: (cb: (info: { fromTrackId?: string; nextTrackId: string; spotifyId?: string; revision?: number }) => void) => () => void;
         onAutomixPlan: (cb: (plan: AutoMixPlan | null) => void) => () => void;
         onSmartToast: (cb: (toast: { message: string; kind: string; timestamp: number }) => void) => () => void;
         onSleepTimerUpdate: (cb: (info: { remainingSec: number; afterTrack: boolean }) => void) => () => void;
@@ -320,7 +318,7 @@ declare global {
       };
       providers: {
         searchMulti: (query: string, source?: string) => Promise<MultiTrackCandidate[]>;
-        resolveUniversal: (track: object, forceSource?: AudioSourceId) => Promise<SmartStreamResolution>;
+        resolveUniversal: (track: object, forceSource?: AudioSourceId, options?: { priority?: 'playback' | 'prebuffer' }) => Promise<SmartStreamResolution>;
         findAlternatives: (track: object) => Promise<MultiTrackCandidate[]>;
         checkLatencies: () => Promise<ProviderLatencyInfo[]>;
       };

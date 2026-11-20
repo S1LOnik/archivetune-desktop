@@ -81,7 +81,8 @@ function getInnertube(): Promise<Innertube | null> {
   return innertubePromise;
 }
 
-function postInnerTube<T = any>(url: string, body: Record<string, unknown>, timeoutMs = 8500): Promise<T | null> {
+function postInnerTube<T = any>(url: string, body: Record<string, unknown>, timeoutMs = 8500, signal?: AbortSignal): Promise<T | null> {
+  if (signal?.aborted) return Promise.resolve(null);
   return new Promise((resolve) => {
     try {
       const parsed = new URL(url);
@@ -107,6 +108,7 @@ function postInnerTube<T = any>(url: string, body: Record<string, unknown>, time
             'Content-Type': 'application/json',
             'Content-Length': Buffer.byteLength(payload),
           },
+          signal,
         },
         (res) => {
           const chunks: Buffer[] = [];
@@ -257,15 +259,16 @@ function extractTwoRowOrListEntity(item: any, fallbackType: YTMusicEntity['type'
   };
 }
 
-async function ytmusicSearchFiltered(query: string, limit: number, filter: 'songs' | 'videos'): Promise<YTMusicTrack[]> {
-  if (!query.trim()) return [];
+async function ytmusicSearchFiltered(query: string, limit: number, filter: 'songs' | 'videos', signal?: AbortSignal): Promise<YTMusicTrack[]> {
+  if (!query.trim() || signal?.aborted) return [];
   const cacheKey = `${filter}:${query.trim().toLowerCase()}:${limit}`;
   const hit = searchSongsCache.get(cacheKey);
   if (hit && hit.expiresAt > Date.now()) {
     return hit.results;
   }
 
-  const data = await postInnerTube<any>(INNERTUBE_SEARCH_URL, { query, params: filter === 'videos' ? 'EgWKAQIQAWoKEAMQBBAJEAoQBQ%3D%3D' : 'EgWKAQIIAWoKEAMQBBAJEAoQBQ%3D%3D' });
+  const data = await postInnerTube<any>(INNERTUBE_SEARCH_URL, { query, params: filter === 'videos' ? 'EgWKAQIQAWoKEAMQBBAJEAoQBQ%3D%3D' : 'EgWKAQIIAWoKEAMQBBAJEAoQBQ%3D%3D' }, 8500, signal);
+  if (signal?.aborted) return [];
   const tabs = data?.contents?.tabbedSearchResultsRenderer?.tabs;
   const sections = tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
   const songs: YTMusicTrack[] = [];
@@ -287,8 +290,8 @@ async function ytmusicSearchFiltered(query: string, limit: number, filter: 'song
   return songs;
 }
 
-export async function ytmusicSearchSongs(query: string, limit = 20): Promise<YTMusicTrack[]> {
-  return ytmusicSearchFiltered(query, limit, 'songs');
+export async function ytmusicSearchSongs(query: string, limit = 20, signal?: AbortSignal): Promise<YTMusicTrack[]> {
+  return ytmusicSearchFiltered(query, limit, 'songs', signal);
 }
 
 export async function ytmusicSearchAll(query: string): Promise<YTMusicSearchAllResult> {
@@ -370,11 +373,14 @@ function getWatchNextTracks(videoId: string): Promise<any[]> {
   return task;
 }
 
-export async function ytmusicGetTrackDuration(videoId: string): Promise<number> {
-  if (!/^[\w-]{11}$/.test(videoId)) return 0;
+export async function ytmusicGetTrackDuration(videoId: string, signal?: AbortSignal): Promise<number> {
+  if (!/^[\w-]{11}$/.test(videoId) || signal?.aborted) return 0;
   const known = trackDurations.get(videoId);
   if (known) return known;
-  await Promise.race([getWatchNextTracks(videoId), delay(3200, undefined, { ref: false })]);
+  await Promise.race([
+    getWatchNextTracks(videoId),
+    delay(3200, undefined, { ref: false, signal }).catch(() => undefined),
+  ]);
   return trackDurations.get(videoId) || 0;
 }
 
@@ -661,36 +667,46 @@ export async function ytmusicGetExplore() {
   return { sections };
 }
 
-const pendingStreams = new Map<string, Promise<string | null>>();
+const pendingStreams = new Map<string, { promise: Promise<string | null>; controller: AbortController; waiters: number }>();
 
-function fetchDirectInnerTubeStream(videoId: string, signal: AbortSignal): Promise<string | null> {
-  return new Promise((resolve) => {
-    const postData = JSON.stringify({
-      videoId,
-      context: {
-        client: {
-          clientName: 'ANDROID_VR',
-          clientVersion: '1.61.48',
-          deviceMake: 'Oculus',
-          deviceModel: 'Quest 3',
-          osName: 'Android',
-          osVersion: '12',
-          androidSdkVersion: 32,
-          hl: 'en',
-          gl: 'US',
-        },
+const DIRECT_INNERTUBE_CLIENTS = [
+  {
+    context: {
+      client: {
+        clientName: 'ANDROID_VR',
+        clientVersion: '1.61.48',
+        deviceMake: 'Oculus',
+        deviceModel: 'Quest 3',
+        osName: 'Android',
+        osVersion: '12',
+        androidSdkVersion: 32,
+        hl: 'en',
+        gl: 'US',
       },
-    });
+    },
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Android; Mobile; rv:109.0) Gecko/114.0 Firefox/114.0',
+      'X-YouTube-Client-Name': '28',
+      'X-YouTube-Client-Version': '1.61.48',
+    },
+  },
+];
 
+function fetchInnerTubeClientStream(
+  videoId: string,
+  clientConfig: typeof DIRECT_INNERTUBE_CLIENTS[number],
+  signal: AbortSignal
+): Promise<string | null> {
+  if (signal.aborted) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const postData = JSON.stringify({ videoId, context: clientConfig.context });
     const req = https.request(
       'https://www.youtube.com/youtubei/v1/player?prettyPrint=false',
       {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'User-Agent': 'Mozilla/5.0 (Android; Mobile; rv:109.0) Gecko/114.0 Firefox/114.0',
-          'X-YouTube-Client-Name': '28',
-          'X-YouTube-Client-Version': '1.61.48',
+          ...clientConfig.headers,
           'Content-Length': Buffer.byteLength(postData),
         },
         signal,
@@ -724,6 +740,16 @@ function fetchDirectInnerTubeStream(videoId: string, signal: AbortSignal): Promi
     req.write(postData);
     req.end();
   });
+}
+
+function fetchDirectInnerTubeStream(videoId: string, signal: AbortSignal): Promise<string | null> {
+  return firstAvailable(
+    DIRECT_INNERTUBE_CLIENTS.map((client) =>
+      fetchInnerTubeClientStream(videoId, client, signal)
+        .then((url) => (url && !signal.aborted ? isStreamAccessible(url, signal).then((ok) => (ok ? url : null)) : null))
+        .catch(() => null)
+    )
+  );
 }
 
 function extractStreamCandidates(videoId: string, signal: AbortSignal, fast: boolean): Promise<string[]> {
@@ -799,37 +825,82 @@ function firstAvailable(attempts: Promise<string | null>[]): Promise<string | nu
   })).catch(() => null);
 }
 
-export function ytmusicGetStreamUrl(videoId: string): Promise<string | null> {
-  if (!/^[\w-]{11}$/.test(videoId)) return Promise.resolve(null);
+export function ytmusicGetStreamUrl(videoId: string, externalSignal?: AbortSignal): Promise<string | null> {
+  if (!/^[\w-]{11}$/.test(videoId) || externalSignal?.aborted) return Promise.resolve(null);
   const cached = streamUrlCache.get(videoId);
   if (cached && cached.expiresAt > Date.now()) return Promise.resolve(cached.url);
-  const pending = pendingStreams.get(videoId);
-  if (pending) return pending;
-  const task = (async () => {
+
+  let entry = pendingStreams.get(videoId);
+  if (!entry) {
     const controller = new AbortController();
     const { signal } = controller;
-    try {
-      const direct = fetchDirectInnerTubeStream(videoId, signal)
-        .then(url => url && isStreamAccessible(url, signal).then(ok => ok ? url : null))
-        .catch(() => null);
-      // Most tracks need only the direct lookup or the single-client extractor.
-      const fast = Promise.race([direct, delay(200, null, { signal })])
-        .then(url => url ?? resolveExtractedStream(videoId, signal, true))
-        .catch(() => null);
-      const fallback = Promise.race([fast, delay(1800, null, { signal })])
-        .then(url => !signal.aborted && !url ? resolveExtractedStream(videoId, signal, false) : url);
-      const url = await firstAvailable([direct, fast, fallback]);
-      if (url) {
-        if (streamUrlCache.size >= 150) streamUrlCache.delete(streamUrlCache.keys().next().value!);
-        streamUrlCache.set(videoId, { url, expiresAt: Date.now() + 20 * 60 * 1000 });
+    const promise = (async () => {
+      try {
+        const direct = fetchDirectInnerTubeStream(videoId, signal).catch(() => null);
+        // Most tracks need only the direct lookup or the single-client extractor.
+        const fast = Promise.race([direct, delay(200, null, { signal }).catch(() => null)])
+          .then(url => (url ?? (!signal.aborted ? resolveExtractedStream(videoId, signal, true) : null)))
+          .catch(() => null);
+        const fallback = Promise.race([fast, delay(2000, null, { signal }).catch(() => null)])
+          .then(url => (!signal.aborted && !url ? resolveExtractedStream(videoId, signal, false) : url));
+        const url = await firstAvailable([direct, fast, fallback]);
+        if (url) {
+          if (streamUrlCache.size >= 150) streamUrlCache.delete(streamUrlCache.keys().next().value!);
+          streamUrlCache.set(videoId, { url, expiresAt: Date.now() + 20 * 60 * 1000 });
+        }
+        return url;
+      } finally {
+        controller.abort();
       }
-      return url;
-    } finally {
-      controller.abort();
+    })().finally(() => {
+      if (pendingStreams.get(videoId)?.promise === promise) pendingStreams.delete(videoId);
+    });
+    entry = { promise, controller, waiters: 0 };
+    pendingStreams.set(videoId, entry);
+  }
+
+  const activeEntry = entry;
+  activeEntry.waiters++;
+  if (!externalSignal) {
+    return activeEntry.promise.finally(() => {
+      activeEntry.waiters = Math.max(0, activeEntry.waiters - 1);
+    });
+  }
+
+  return new Promise<string | null>((resolve) => {
+    let settled = false;
+    const releaseWaiter = () => {
+      activeEntry.waiters = Math.max(0, activeEntry.waiters - 1);
+      if (activeEntry.waiters === 0) activeEntry.controller.abort();
+    };
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      releaseWaiter();
+      resolve(null);
+    };
+    if (externalSignal.aborted) {
+      onAbort();
+      return;
     }
-  })().finally(() => pendingStreams.delete(videoId));
-  pendingStreams.set(videoId, task);
-  return task;
+    externalSignal.addEventListener('abort', onAbort, { once: true });
+    activeEntry.promise.then(
+      (url) => {
+        if (settled) return;
+        settled = true;
+        externalSignal.removeEventListener('abort', onAbort);
+        activeEntry.waiters = Math.max(0, activeEntry.waiters - 1);
+        resolve(url);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        externalSignal.removeEventListener('abort', onAbort);
+        activeEntry.waiters = Math.max(0, activeEntry.waiters - 1);
+        resolve(null);
+      }
+    );
+  });
 }
 
 const CATEGORY_QUERIES: Record<string, string> = {

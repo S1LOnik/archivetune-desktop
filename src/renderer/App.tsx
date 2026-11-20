@@ -5,11 +5,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useInterfaceMotion } from './lib/useInterfaceMotion';
 import { useSpotifyLyricsId } from './lib/useSpotifyLyricsId';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { Play, Pause, SkipBack, SkipForward, Heart } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import TitleBar from './components/TitleBar';
 import MiniPlayer from './components/MiniPlayer';
-import PlaybackPulse from './components/PlaybackPulse';
 import QueueDrawer from './components/QueueDrawer';
 import TrackContextMenu from './components/TrackContextMenu';
 import SourceSwitcherModal from './components/SourceSwitcherModal';
@@ -34,7 +32,7 @@ import {
   hydrateStoresFromDatabase,
   extractArtworkColors,
 } from './store';
-import { usePlayer, usePlayerEvents } from './lib/usePlayer';
+import { usePlayerEvents } from './lib/usePlayer';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -55,13 +53,9 @@ function AppContent() {
   const mainRef = useRef<HTMLElement>(null);
   useEffect(() => { if (mainRef.current) mainRef.current.scrollTop = 0; }, [location.pathname]);
   usePlayerEvents();
-  const { showNowPlaying, isMiniPipMode } = useUIStore(useShallow(({ showNowPlaying, isMiniPipMode }) => ({ showNowPlaying, isMiniPipMode })));
+  const showNowPlaying = useUIStore((s) => s.showNowPlaying);
   const currentTrack = usePlayerStore((s) => s.currentTrack);
   const spotifyLyricsId = useSpotifyLyricsId(currentTrack);
-  const isPlaying = usePlayerStore((s) => isMiniPipMode && s.isPlaying);
-  const loading = usePlayerStore((s) => isMiniPipMode && s.loading);
-  const liked = usePlayerStore((s) => isMiniPipMode && s.isTrackLiked(s.currentTrack));
-  const { pause, resume, skipNext, skipPrev, toggleLikeCurrent } = usePlayer();
 
   useEffect(() => {
     void hydrateStoresFromDatabase();
@@ -77,7 +71,9 @@ function AppContent() {
     let cancelled = false;
     const track = currentTrack;
     void window.electronAPI.lyrics.get(track.title, track.artist, track.duration, track.id, spotifyLyricsId).then(result => {
-      if (!cancelled) window.electronAPI.desktop.updateLyrics(track.id, result.synced || []);
+      if (!cancelled && usePlayerStore.getState().currentTrack?.id === track.id) {
+        window.electronAPI.desktop.updateLyrics(track.id, result.synced || []);
+      }
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [currentTrack?.id, currentTrack?.title, currentTrack?.artist, currentTrack?.duration, spotifyLyricsId]);
@@ -96,80 +92,6 @@ function AppContent() {
     });
     return () => { cancelled = true; };
   }, [thumbnail, seedColor, dynamicColorFromArt, setActiveArtColor]);
-
-  // Compact Always-on-Top Mini Widget (PiP) Overlay Mode
-  if (isMiniPipMode) {
-    return (
-      <div className="flex flex-col h-full bg-surface text-on-surface overflow-hidden select-none relative">
-        {currentTrack?.thumbnail && (
-          <div
-            className="absolute inset-0 bg-cover bg-center blur-2xl opacity-30 scale-125 pointer-events-none"
-            style={{ backgroundImage: `url(${currentTrack.thumbnail})` }}
-          />
-        )}
-        <TitleBar />
-        <div className="relative z-10 flex-1 flex items-center justify-between px-4 gap-3">
-          <div className="flex items-center gap-3 min-w-0 flex-1">
-            <div className="w-14 h-14 rounded-2xl overflow-hidden bg-surface-container-high shadow-lg flex-shrink-0">
-              {currentTrack?.thumbnail ? (
-                <img
-                  src={currentTrack.thumbnail}
-                  alt=""
-                  className="w-full h-full object-cover"
-                />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center text-xl">🎵</div>
-              )}
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-black text-on-surface truncate">
-                {currentTrack?.title || 'No Track Playing'}
-              </p>
-              <p className="text-xs text-on-surface-variant truncate">
-                {currentTrack?.artist || 'ArchiveTune Mini Widget'}
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-1.5 flex-shrink-0">
-            {currentTrack && (
-              <button
-                onClick={() => toggleLikeCurrent(currentTrack)}
-                className={`p-1.5 rounded-full ${
-                  liked ? 'text-pink-400' : 'text-on-surface-variant hover:text-on-surface'
-                }`}
-              >
-                <Heart size={15} fill={liked ? 'currentColor' : 'none'} />
-              </button>
-            )}
-            <button
-              onClick={skipPrev}
-              className="p-1.5 text-on-surface-variant hover:text-on-surface"
-            >
-              <SkipBack size={18} />
-            </button>
-            <button
-              onClick={() => (isPlaying ? pause() : resume())}
-              disabled={loading}
-              aria-busy={loading}
-              aria-label={loading ? 'Запускаем трек…' : isPlaying ? 'Пауза' : 'Воспроизвести'}
-              className="playback-trigger w-10 h-10 rounded-2xl bg-primary text-on-primary flex items-center justify-center shadow-md"
-            >
-              <PlaybackPulse />
-              {loading ? <span className="w-4 h-4 rounded-full border-2 border-current border-t-transparent animate-spin playback-spinner" />
-                : isPlaying ? <Pause size={18} /> : <Play size={18} className="translate-x-0.5" />}
-            </button>
-            <button
-              onClick={skipNext}
-              className="p-1.5 text-on-surface-variant hover:text-on-surface"
-            >
-              <SkipForward size={18} />
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="app-shell relative isolate flex flex-col h-full bg-surface text-on-surface overflow-hidden select-none">
@@ -214,7 +136,7 @@ function AppContent() {
         <QueueDrawer />
       </div>
 
-      {/* Mini Player (bottom bar) */}
+      {/* Playback bar */}
       {currentTrack && <MiniPlayer />}
 
       {/* Full Now Playing Overlay */}

@@ -110,6 +110,8 @@ export default function NowPlayingOverlay() {
     currentTrack,
     isPlaying,
     loading,
+    loadingStage,
+    playbackError,
     automixing,
     position,
     duration,
@@ -172,6 +174,7 @@ export default function NowPlayingOverlay() {
   const {
     pause,
     resume,
+    retryCurrentTrack,
     seek,
     skipNext,
     skipPrev,
@@ -695,45 +698,55 @@ export default function NowPlayingOverlay() {
       </button>
 
       <motion.button
+        type="button"
         animate={!reducedMotion && arrowPulse === 'prev' ? { scale: 0.78, x: -8 } : { scale: 1, x: 0 }}
         transition={controlTransition}
         onClick={handleInstantPrev}
         className="p-2.5 text-on-surface hover:text-primary transition-colors"
         title="Предыдущий трек"
+        aria-label="Предыдущий трек"
       >
-        <SkipBack size={28} />
+        <SkipBack size={28} aria-hidden="true" />
       </motion.button>
 
       <motion.button
-        whileTap={press}
+        type="button"
+        whileTap={loading ? undefined : press}
         animate={{ borderRadius: isPlaying ? '22px' : '36px' }}
         transition={controlTransition}
-        onClick={() => (isPlaying ? pause() : resume())}
-        disabled={loading}
+        onClick={() => {
+          if (loading) return;
+          if (playbackError) void retryCurrentTrack();
+          else void (isPlaying ? pause() : resume());
+        }}
+        aria-disabled={loading}
         aria-busy={loading}
-        aria-label={loading ? 'Запускаем трек…' : isPlaying ? 'Пауза' : 'Воспроизвести'}
-        className={`playback-trigger ${playSize} ${playColor} flex items-center justify-center shadow-xl shadow-primary/30 hover:opacity-95`}
+        aria-label={loading ? 'Запускаем трек…' : playbackError ? 'Повторить запуск' : isPlaying ? 'Пауза' : 'Воспроизвести'}
+        className={`playback-trigger ${playSize} ${playColor} flex items-center justify-center shadow-xl shadow-primary/30 hover:opacity-95 ${loading ? 'opacity-85 cursor-wait' : ''}`}
       >
         <PlaybackPulse />
         <motion.div
-          key={loading ? 'loading' : isPlaying ? 'pause-icon' : 'play-icon'}
+          key={loading ? 'loading' : playbackError ? 'retry' : isPlaying ? 'pause-icon' : 'play-icon'}
           initial={reducedMotion ? false : { scale: 0.6, rotate: -20, opacity: 0 }}
           animate={{ scale: 1, rotate: 0, opacity: 1 }}
           transition={controlTransition}
         >
           {loading ? <span className="block w-6 h-6 rounded-full border-2 border-current border-t-transparent animate-spin playback-spinner" />
-            : isPlaying ? <Pause size={28} /> : <Play size={28} className="translate-x-0.5" />}
+            : playbackError ? <RotateCcw size={26} aria-hidden="true" />
+            : isPlaying ? <Pause size={28} aria-hidden="true" /> : <Play size={28} className="translate-x-0.5" aria-hidden="true" />}
         </motion.div>
       </motion.button>
 
       <motion.button
+        type="button"
         animate={!reducedMotion && arrowPulse === 'next' ? { scale: 0.78, x: 8 } : { scale: 1, x: 0 }}
         transition={controlTransition}
         onClick={handleInstantNext}
         className="p-2.5 text-on-surface hover:text-primary transition-colors"
         title="Следующий трек"
+        aria-label="Следующий трек"
       >
-        <SkipForward size={28} />
+        <SkipForward size={28} aria-hidden="true" />
       </motion.button>
 
       <button
@@ -1302,13 +1315,65 @@ export default function NowPlayingOverlay() {
               <span>Свернуть (Esc)</span>
             </button>
             <button
+              type="button"
               onClick={() => setSourceSwitcherTrack(currentTrack)}
               className="text-[11px] font-bold text-primary uppercase tracking-widest px-2.5 py-1 rounded-full bg-primary/15   hover:bg-primary/25 transition inline-flex items-center gap-1.5"
               title="Выбрать источник звука"
             >
-              <ArrowLeftRight size={11} />
+              <ArrowLeftRight size={11} aria-hidden="true" />
               {resolvedSourceBadge || currentTrack.source.toUpperCase()}
             </button>
+            {loading && (
+              <span
+                role={loadingStage === 'slow' ? 'status' : undefined}
+                className={`text-[11px] font-semibold px-2.5 py-1 rounded-full inline-flex items-center gap-1.5 ${
+                  loadingStage === 'slow'
+                    ? 'bg-amber-500/20 text-amber-200'
+                    : 'bg-primary/15 text-primary'
+                }`}
+              >
+                <span className="w-3 h-3 rounded-full border-2 border-current border-t-transparent animate-spin playback-spinner" aria-hidden="true" />
+                <span>
+                  {loadingStage === 'slow'
+                    ? 'Долгое ожидание источника…'
+                    : loadingStage === 'buffering'
+                      ? 'Запускаем аудио…'
+                      : 'Ищем аудиопоток…'}
+                </span>
+                {loadingStage === 'slow' && (
+                  <button
+                    type="button"
+                    onClick={() => setSourceSwitcherTrack(currentTrack)}
+                    className="ml-1 px-2 py-0.5 rounded-full bg-amber-500/30 hover:bg-amber-500/45 text-amber-100 font-bold transition"
+                  >
+                    Сменить источник
+                  </button>
+                )}
+              </span>
+            )}
+            {playbackError && !loading && (
+              <span
+                role="alert"
+                className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-red-500/20 text-red-200 inline-flex items-center gap-2 max-w-full"
+              >
+                <span className="truncate max-w-[240px]" title={playbackError}>{playbackError}</span>
+                <button
+                  type="button"
+                  onClick={() => void retryCurrentTrack()}
+                  className="px-2 py-0.5 rounded-full bg-red-500/35 hover:bg-red-500/50 text-white font-bold inline-flex items-center gap-1 transition flex-shrink-0"
+                >
+                  <RotateCcw size={11} aria-hidden="true" />
+                  Повторить
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSourceSwitcherTrack(currentTrack)}
+                  className="px-2 py-0.5 rounded-full bg-surface-container-highest hover:brightness-110 text-on-surface font-semibold transition flex-shrink-0"
+                >
+                  Источник
+                </button>
+              </span>
+            )}
             <button
               onClick={() => setAuditTarget({ track: currentTrack, urlOrPath: currentTrack.path })}
               className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-surface-container-high/80 text-on-surface-variant hover:text-primary   transition inline-flex items-center gap-1"

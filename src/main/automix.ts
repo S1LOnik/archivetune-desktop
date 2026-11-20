@@ -18,14 +18,15 @@ import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { runAudioDsp } from './audioDspClient';
 
-function decodePcmSegment(source: string, maxSeconds = 45, sampleRate = 22050, startSec = 0): Promise<Float32Array<ArrayBuffer> | null> {
+function decodePcmSegment(source: string, maxSeconds = 45, sampleRate = 22050, startSec = 0, signal?: AbortSignal): Promise<Float32Array<ArrayBuffer> | null> {
+  if (signal?.aborted) return Promise.resolve(null);
   return new Promise((resolve) => {
     const args: string[] = ['-v', 'quiet'];
     if (startSec > 0) args.push('-ss', String(startSec));
     args.push('-i', source, '-t', String(maxSeconds), '-ac', '1', '-ar', String(sampleRate), '-f', 'f32le', 'pipe:1');
 
-    const child = execFile('ffmpeg', args, { encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, timeout: 15000 }, (err, stdout) => {
-      if (err || !stdout || stdout.length < 4096) {
+    const child = execFile('ffmpeg', args, { encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, timeout: 15000, signal }, (err, stdout) => {
+      if (err || !stdout || stdout.length < 4096 || signal?.aborted) {
         return resolve(null);
       }
       const alignedLen = stdout.length - (stdout.length % 4);
@@ -83,8 +84,8 @@ function getAutomixStoreDir(): string {
   }
 }
 
-export async function analyzeAudioForAutomix(trackId: string, sourceUrlOrPath: string, durationSec: number): Promise<AutoMixAnalysis | null> {
-  if (!trackId || !sourceUrlOrPath) return null;
+export async function analyzeAudioForAutomix(trackId: string, sourceUrlOrPath: string, durationSec: number, signal?: AbortSignal): Promise<AutoMixAnalysis | null> {
+  if (!trackId || !sourceUrlOrPath || signal?.aborted) return null;
   const cached = analysisCache.get(trackId);
   if (cached) return cached;
 
@@ -104,15 +105,17 @@ export async function analyzeAudioForAutomix(trackId: string, sourceUrlOrPath: s
   const analysisRate = isLocal ? 22050 : 11025;
   const fftSize = isLocal ? 1024 : 512;
 
-  const samples = await decodePcmSegment(sourceUrlOrPath, 35, analysisRate, 0);
-  if (!samples || samples.length < fftSize * 4) return null;
+  const samples = await decodePcmSegment(sourceUrlOrPath, 35, analysisRate, 0, signal);
+  if (signal?.aborted || !samples || samples.length < fftSize * 4) return null;
 
   const features = await runAudioDsp({ kind: 'automix', samples, sampleRate: analysisRate, fftSize });
+  if (signal?.aborted) return null;
 
   // Measure trailing silence on local files
   let trailingSilenceMs = 900;
   if (isLocal && durationSec > 10) {
-    const tail = await decodePcmSegment(sourceUrlOrPath, 8, 11025, Math.max(0, durationSec - 8));
+    const tail = await decodePcmSegment(sourceUrlOrPath, 8, 11025, Math.max(0, durationSec - 8), signal);
+    if (signal?.aborted) return null;
     if (tail && tail.length > 0) {
       let silentSamples = 0;
       for (let i = tail.length - 1; i >= 0; i--) {

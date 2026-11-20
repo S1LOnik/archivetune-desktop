@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import TrackRow from '../components/TrackRow';
 import FeaturedCarousel from '../components/FeaturedCarousel';
+import HomeSectionNav from '../components/HomeSectionNav';
 import { Track, usePlayerStore, useAccountsStore } from '../store';
 import { usePlayer } from '../lib/usePlayer';
 
@@ -54,6 +55,7 @@ interface YtmShelf {
 
 export default function HomePage() {
   const navigate = useNavigate();
+  const introRef = useRef<HTMLDivElement>(null);
   const listenDrag = useRef<{ startX: number; scrollLeft: number; moved: boolean } | null>(null);
   const listenDragged = useRef(false);
   const queryClient = useQueryClient();
@@ -286,98 +288,111 @@ export default function HomePage() {
     }
   };
 
+  const sections = [
+    ...(quickPicks.length ? [{ id: 'home-quick-picks', label: 'Быстрый выбор' }] : []),
+    ...(ytmShelves.length ? [{ id: 'home-youtube', label: 'YouTube Music' }] : []),
+    ...(mixPages.length ? [{ id: 'home-mixes', label: 'Миксы' }] : []),
+    ...(spotifyPlaylists.length || spotifyTracks.length ? [{ id: 'home-spotify', label: 'Spotify' }] : []),
+    ...(keepListening.length ? [{ id: 'home-recent', label: 'Послушать ещё раз' }] : []),
+    ...(forgottenFavorites.length ? [{ id: 'home-collection', label: 'Из коллекции' }] : []),
+  ];
+
   return (
     <div className="screen home-page">
-      <header className="screen-header">
-        <div>
-          <h1>{greeting}</h1>
-        </div>
-
-        <div className="flex items-center gap-2 flex-wrap">
-          <button
-            onClick={() => navigate('/explore')}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-surface-container hover:bg-surface-container-high text-xs font-semibold text-on-surface transition-all"
-          >
-            <Compass size={14} className="text-primary" /> Обзор
-          </button>
-          <button
-            onClick={() => navigate('/together')}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-surface-container hover:bg-surface-container-high text-xs font-semibold text-on-surface transition-all"
-          >
-            <Users size={14} className="text-primary" /> Вместе
-          </button>
-          <button
-            onClick={handleRefresh}
-            disabled={isRefreshing || isFetching}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-primary/15 hover:bg-primary/25 text-xs font-bold text-primary transition-all active:scale-95 disabled:opacity-50"
-          >
-            <RefreshCw size={14} className={isRefreshing || isFetching ? 'animate-spin' : ''} />
-            <span>{isRefreshing ? 'Обновление…' : 'Обновить'}</span>
-          </button>
-        </div>
-      </header>
-
-      <FeaturedCarousel tracks={carouselTracks} onPlay={playCarouselTrack} source={homeData?.quickPicksSource || 'unavailable'} />
-
-      {/* Connected Ecosystem Banner / Quick Stations */}
-      <section className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <button
-          onClick={() => {
-            if (likedSongs.length > 0) {
-              const shuffled = [...likedSongs].sort(() => Math.random() - 0.5);
-              setQueue(shuffled, 0);
-              void playTrack(shuffled[0]);
-            } else if (quickPicks[0]) {
-              void startRadio(quickPicks[0]);
-            }
-          }}
-          className="quick-tile glass-card group p-4 rounded-2xl bg-gradient-to-br from-primary/25 via-primary/10 to-surface-container/70 text-left flex items-center justify-between"
-        >
-          <div className="space-y-1">
-            <p className="text-sm font-bold text-on-surface">
-              {likedSongs.length > 0 ? 'Любимые треки' : 'Радио по рекомендациям'}
-            </p>
-            {likedSongs.length > 0 && <p className="text-xs text-on-surface-variant">{trackCount(likedSongs.length)}</p>}
+      <div ref={introRef} className="home-intro">
+        <header className="screen-header">
+          <div>
+            <h1 id="home-title" tabIndex={-1}>{greeting}</h1>
           </div>
-          <div className="w-10 h-10 shrink-0 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform">
-            <Shuffle size={16} />
-          </div>
-        </button>
 
-        <button
-          onClick={() => navigate('/library')}
-          className="quick-tile glass-card p-4 rounded-2xl text-left flex items-center justify-between hover:bg-surface-container-high/80"
-        >
-          <div className="space-y-1">
-            <p className="text-sm font-bold text-on-surface">Медиатека</p>
-            <p className="text-xs text-on-surface-variant">
-              {trackCount(likedSongs.length)} в любимых · {formatCount(playlists.length, 'плейлист', 'плейлиста', 'плейлистов')}
-            </p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() => navigate('/explore')}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-surface-container hover:bg-surface-container-high text-xs font-semibold text-on-surface transition-all"
+            >
+              <Compass size={14} className="text-primary" /> Обзор
+            </button>
+            <button
+              onClick={() => navigate('/together')}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-surface-container hover:bg-surface-container-high text-xs font-semibold text-on-surface transition-all"
+            >
+              <Users size={14} className="text-primary" /> Вместе
+            </button>
+            <button
+              onClick={handleRefresh}
+              disabled={isRefreshing || isFetching}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-primary/15 hover:bg-primary/25 text-xs font-bold text-primary transition-all active:scale-95 disabled:opacity-50"
+            >
+              <RefreshCw size={14} className={isRefreshing || isFetching ? 'animate-spin' : ''} />
+              <span>{isRefreshing ? 'Обновление…' : 'Обновить'}</span>
+            </button>
           </div>
-          <span className="px-2.5 py-1 rounded-lg bg-surface-container-highest text-[11px] font-bold text-primary">
-            Открыть
-          </span>
-        </button>
+        </header>
 
-        <button
-          onClick={() => navigate('/integrations')}
-          className="quick-tile glass-card p-4 rounded-2xl text-left flex items-center justify-between hover:bg-surface-container-high/80"
-        >
-          <div className="space-y-1">
-            <div className="flex items-center gap-2 text-sm font-bold text-on-surface">
-              <PlugZap size={15} className="text-primary" /> Подключения
+        <FeaturedCarousel tracks={carouselTracks} onPlay={playCarouselTrack} source={homeData?.quickPicksSource || 'unavailable'} />
+
+        {/* Connected Ecosystem Banner / Quick Stations */}
+        <section className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <button
+            onClick={() => {
+              if (likedSongs.length > 0) {
+                const shuffled = [...likedSongs].sort(() => Math.random() - 0.5);
+                setQueue(shuffled, 0);
+                void playTrack(shuffled[0]);
+              } else if (quickPicks[0]) {
+                void startRadio(quickPicks[0]);
+              }
+            }}
+            className="quick-tile glass-card group p-4 rounded-2xl bg-gradient-to-br from-primary/25 via-primary/10 to-surface-container/70 text-left flex items-center justify-between"
+          >
+            <div className="space-y-1">
+              <p className="text-sm font-bold text-on-surface">
+                {likedSongs.length > 0 ? 'Любимые треки' : 'Радио по рекомендациям'}
+              </p>
+              {likedSongs.length > 0 && <p className="text-xs text-on-surface-variant">{trackCount(likedSongs.length)}</p>}
             </div>
-            <p className="text-xs text-on-surface-variant">
-              {[spotifyConnected && 'Spotify', ytmConnected && 'YouTube Music', scConnected && 'SoundCloud']
-                .filter(Boolean)
-                .join(' · ') || 'Подключите музыкальный сервис'}
-            </p>
-          </div>
-          <span className="px-2.5 py-1 rounded-lg bg-surface-container-highest text-[11px] font-bold text-on-surface">
-            Настроить
-          </span>
-        </button>
-      </section>
+            <div className="w-10 h-10 shrink-0 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform">
+              <Shuffle size={16} />
+            </div>
+          </button>
+
+          <button
+            onClick={() => navigate('/library')}
+            className="quick-tile glass-card p-4 rounded-2xl text-left flex items-center justify-between hover:bg-surface-container-high/80"
+          >
+            <div className="space-y-1">
+              <p className="text-sm font-bold text-on-surface">Медиатека</p>
+              <p className="text-xs text-on-surface-variant">
+                {trackCount(likedSongs.length)} в любимых · {formatCount(playlists.length, 'плейлист', 'плейлиста', 'плейлистов')}
+              </p>
+            </div>
+            <span className="px-2.5 py-1 rounded-lg bg-surface-container-highest text-[11px] font-bold text-primary">
+              Открыть
+            </span>
+          </button>
+
+          <button
+            onClick={() => navigate('/integrations')}
+            className="quick-tile glass-card p-4 rounded-2xl text-left flex items-center justify-between hover:bg-surface-container-high/80"
+          >
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 text-sm font-bold text-on-surface">
+                <PlugZap size={15} className="text-primary" /> Подключения
+              </div>
+              <p className="text-xs text-on-surface-variant">
+                {[spotifyConnected && 'Spotify', ytmConnected && 'YouTube Music', scConnected && 'SoundCloud']
+                  .filter(Boolean)
+                  .join(' · ') || 'Подключите музыкальный сервис'}
+              </p>
+            </div>
+            <span className="px-2.5 py-1 rounded-lg bg-surface-container-highest text-[11px] font-bold text-on-surface">
+              Настроить
+            </span>
+          </button>
+        </section>
+      </div>
+
+      {sections.length > 0 && <HomeSectionNav introRef={introRef} sections={sections} />}
 
       {/* Real YouTube Music Mood & Activity Chips (from FEmusic_home) */}
       {chips.length > 0 && (
@@ -418,7 +433,7 @@ export default function HomePage() {
             <div className="flex items-center gap-2">
               <Sparkles size={18} className="text-primary" />
               <div>
-                <h2 className="text-lg font-bold text-on-surface tracking-tight">Быстрый выбор</h2>
+                <h2 id="home-quick-picks" tabIndex={-1} className="text-lg font-bold text-on-surface tracking-tight">Быстрый выбор</h2>
                 <p className="text-[11px] text-on-surface-variant">
                   {quickPickSources}
                 </p>
@@ -497,7 +512,7 @@ export default function HomePage() {
         return (
           <section key={`ytm-shelf-${sIdx}`} className="home-shelf space-y-3">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-bold text-on-surface tracking-tight">{shelf.title}</h2>
+              <h2 id={sIdx === 0 ? 'home-youtube' : undefined} tabIndex={sIdx === 0 ? -1 : undefined} className="text-lg font-bold text-on-surface tracking-tight">{shelf.title}</h2>
               {shelfSongs.length > 0 && (
                 <button
                   onClick={() => handlePlayQueue(shelfSongs, 0)}
@@ -560,7 +575,7 @@ export default function HomePage() {
           <div className="flex items-center gap-2">
             <Disc3 size={18} className="text-primary" />
             <div>
-              <h2 className="text-lg font-bold text-on-surface tracking-tight">
+              <h2 id="home-mixes" tabIndex={-1} className="text-lg font-bold text-on-surface tracking-tight">
                 Персональные миксы для тебя
               </h2>
               <p className="text-[11px] text-on-surface-variant">
@@ -645,7 +660,7 @@ export default function HomePage() {
             <div className="flex items-center gap-2">
               <ListMusic size={18} className="text-emerald-400" />
               <div>
-                <h2 className="text-lg font-bold text-on-surface tracking-tight">
+                <h2 id="home-spotify" tabIndex={-1} className="text-lg font-bold text-on-surface tracking-tight">
                   Spotify: Твои плейлисты и миксы
                 </h2>
                 <p className="text-[11px] text-on-surface-variant">
@@ -705,7 +720,7 @@ export default function HomePage() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Flame size={18} className="text-emerald-400" />
-              <h2 className="text-lg font-bold text-on-surface tracking-tight">
+              <h2 id={spotifyPlaylists.length ? undefined : 'home-spotify'} tabIndex={spotifyPlaylists.length ? undefined : -1} className="text-lg font-bold text-on-surface tracking-tight">
                 В твоём вкусе из Spotify
               </h2>
             </div>
@@ -760,7 +775,7 @@ export default function HomePage() {
             <div className="flex items-center gap-2">
               <History size={18} className="text-primary" />
               <div>
-                <h2 className="text-lg font-bold text-on-surface tracking-tight">
+                <h2 id="home-recent" tabIndex={-1} className="text-lg font-bold text-on-surface tracking-tight">
                   Послушать ещё раз
                 </h2>
                 <p className="text-[11px] text-on-surface-variant">
@@ -819,7 +834,7 @@ export default function HomePage() {
       {forgottenFavorites.length > 0 && (
         <section className="home-shelf space-y-3">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-bold text-on-surface tracking-tight">
+            <h2 id="home-collection" tabIndex={-1} className="text-lg font-bold text-on-surface tracking-tight">
               Из вашей коллекции ({forgottenFavorites.length})
             </h2>
             <button

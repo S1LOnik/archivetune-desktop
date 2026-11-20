@@ -3,7 +3,7 @@
  * 1) Linux MPRIS2 D-Bus (`mpris-service`) for KDE Plasma / GNOME / Lockscreen Media Widget
  * 2) ListenBrainz Scrobbler (`submit-listens`)
  * 3) Discord Rich Presence over Local IPC Socket
- * 4) Global Media Keys + Tray + Close-to-Tray + Always-on-Top Mini PiP Mode
+ * 4) Global Media Keys + Tray + Close-to-Tray
  * 5) Optional Local HTTP Status/Control API (`127.0.0.1:26538`)
  */
 
@@ -193,8 +193,6 @@ export class DesktopIntegration {
   private lastPresence: TrackPresenceInfo | null = null;
   private lyricsTrackId = '';
   private lyricsLrc = '';
-  private isMiniMode = false;
-  private normalBounds: Electron.Rectangle | null = null;
   private isQuitting = false;
 
   public init(win: BrowserWindow): void {
@@ -288,7 +286,6 @@ export class DesktopIntegration {
       this.tray.setContextMenu(
         Menu.buildFromTemplate([
           { label: 'Show ArchiveTune', click: () => { this.mainWindow?.show(); this.mainWindow?.focus(); } },
-          { label: 'Toggle Mini PiP Mode', click: () => this.toggleMiniMode() },
           { type: 'separator' },
           { label: 'Play / Pause', click: () => this.mainWindow?.webContents.send('shortcut:media', 'playPause') },
           { label: 'Next Track', click: () => this.mainWindow?.webContents.send('shortcut:media', 'next') },
@@ -323,26 +320,13 @@ export class DesktopIntegration {
     });
   }
 
-  public toggleMiniMode(): boolean {
-    if (!this.mainWindow) return false;
-    this.isMiniMode = !this.isMiniMode;
-    if (this.isMiniMode) {
-      this.normalBounds = this.mainWindow.getBounds();
-      this.mainWindow.setMinimumSize(360, 110);
-      this.mainWindow.setSize(390, 120);
-      this.mainWindow.setAlwaysOnTop(true, 'floating');
-    } else {
-      this.mainWindow.setAlwaysOnTop(false);
-      this.mainWindow.setMinimumSize(940, 620);
-      if (this.normalBounds) this.mainWindow.setBounds(this.normalBounds);
-      else this.mainWindow.setSize(1280, 820);
-    }
-    this.mainWindow.webContents.send('window:miniModeChanged', this.isMiniMode);
-    return this.isMiniMode;
-  }
-
   public updatePresence(info: TrackPresenceInfo): void {
+    const prevId = this.lastPresence?.id;
     this.lastPresence = info;
+    if (info.id && prevId && info.id !== prevId && this.lyricsTrackId !== info.id) {
+      this.lyricsTrackId = '';
+      this.lyricsLrc = '';
+    }
     this.discord.updateActivity(info);
 
     if (this.mprisPlayer) {
@@ -370,6 +354,8 @@ export class DesktopIntegration {
     });
     ipcMain.on('desktop:updateLyrics', (_e, trackId: string, lines: Array<{ time: number; text: string }>) => {
       if (!trackId || !Array.isArray(lines)) return;
+      // Reject late lyrics updates for superseded tracks so MPRIS xesam:asText never desyncs.
+      if (this.lastPresence?.id && this.lastPresence.id !== trackId) return;
       this.lyricsTrackId = trackId;
       this.lyricsLrc = lines.filter(line => Number.isFinite(line.time) && typeof line.text === 'string').map(line => {
         const hundredths = Math.max(0, Math.round(line.time * 100));
@@ -379,8 +365,8 @@ export class DesktopIntegration {
       }).join('\n');
       if (this.lastPresence?.id === trackId) this.updatePresence(this.lastPresence);
     });
-    ipcMain.handle('window:toggleMiniMode', () => this.toggleMiniMode());
-    ipcMain.on('desktop:updatePosition', (_e, position: number, seeked: boolean) => {
+    ipcMain.on('desktop:updatePosition', (_e, position: number, seeked: boolean, trackId?: string) => {
+      if (trackId && this.lastPresence?.id && this.lastPresence.id !== trackId) return;
       if (this.lastPresence && Number.isFinite(position)) {
         this.lastPresence.position = Math.max(0, position);
         if (seeked) this.mprisPlayer?.seeked(Math.round(this.lastPresence.position * 1e6));

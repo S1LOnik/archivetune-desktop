@@ -15,7 +15,7 @@ import { TitleMatch } from './automix';
 import { ytmusicSearchSongs, ytmusicGetStreamUrl, ytmusicGetTrackDuration, youtubeArtistName } from './ytmusic';
 import { getSoundCloudClientId, getStoredSoundCloudToken } from './soundcloudAuth';
 import { spotifySearchCandidates, getSpotifyAudioCredentials } from './spotify';
-import { resolveNativeSpotify, spotifyTrackId } from './spotifyNative';
+import { resolveNativeSpotify, spotifyTrackId, isNativeSpotifyConnected } from './spotifyNative';
 
 export interface MultiTrackCandidate {
   id: string;
@@ -55,7 +55,8 @@ export interface SmartStreamResolution {
 
 // ─── HTTP Helpers ─────────────────────────────────────────────────────────────
 
-export function httpRequestJson<T = any>(url: string, opts?: { method?: string; headers?: Record<string, string>; body?: string; timeoutMs?: number }): Promise<T | null> {
+export function httpRequestJson<T = any>(url: string, opts?: { method?: string; headers?: Record<string, string>; body?: string; timeoutMs?: number; signal?: AbortSignal }): Promise<T | null> {
+  if (opts?.signal?.aborted) return Promise.resolve(null);
   return new Promise((resolve) => {
     try {
       const parsed = new URL(url);
@@ -69,6 +70,7 @@ export function httpRequestJson<T = any>(url: string, opts?: { method?: string; 
             Accept: 'application/json, text/plain, */*',
             ...(opts?.headers || {}),
           },
+          signal: opts?.signal,
         },
         (res) => {
           if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
@@ -533,9 +535,10 @@ function sourceSearchQuery(track: StreamTrack): string {
   return `${TitleMatch.cleanTitle(track.title)} ${track.artist}`.trim();
 }
 
-async function sourceTrackDuration(track: StreamTrack): Promise<number> {
+async function sourceTrackDuration(track: StreamTrack, signal?: AbortSignal): Promise<number> {
   if (track.duration && track.duration > 0) return track.duration;
-  if (track.source === 'youtube') return ytmusicGetTrackDuration(track.id.replace(/^youtube:/, '')).catch(() => 0);
+  if (signal?.aborted) return 0;
+  if (track.source === 'youtube') return ytmusicGetTrackDuration(track.id.replace(/^youtube:/, ''), signal).catch(() => 0);
   return 0;
 }
 
@@ -656,11 +659,12 @@ async function resolveBySourceId(
       ? cleanYtId
       : undefined;
     if (exactVideoId) {
-      const url = await ytmusicGetStreamUrl(exactVideoId);
+      const url = await ytmusicGetStreamUrl(exactVideoId, signal);
       if (url) return { url, qualityLabel: 'YouTube Music Opus', lossless: false };
     }
     if (signal?.aborted) return null;
-    const ytm = await ytmusicSearchSongs(query, 5);
+    const ytm = await ytmusicSearchSongs(query, 5, signal);
+    if (signal?.aborted) return null;
     const cands: MultiTrackCandidate[] = ytm.filter(y => y.id !== exactVideoId).map((y) => ({
       id: y.id,
       title: y.title,
@@ -671,7 +675,7 @@ async function resolveBySourceId(
     }));
     const match = pickBest(cands);
     if (match && !signal?.aborted) {
-      const url = await ytmusicGetStreamUrl(match.id);
+      const url = await ytmusicGetStreamUrl(match.id, signal);
       if (url) return { url, qualityLabel: 'YouTube Music Opus', lossless: false };
     }
   } else if (source === 'spotify' && settings.nativeSpotifyEnabled) {
@@ -682,7 +686,11 @@ async function resolveBySourceId(
     if (!credentials || signal?.aborted) return null;
     let id = nativeId;
     if (!id) {
-      const [candidates, duration] = await Promise.all([spotifySearchCandidates(query, 6), sourceTrackDuration(track)]);
+      const durationPromise = sourceTrackDuration(track, signal);
+      const candidates = await spotifySearchCandidates(query, 6, signal);
+      if (signal?.aborted || candidates.length === 0) return null;
+      const duration = await durationPromise;
+      if (signal?.aborted) return null;
       id = pickBest(candidates, requireCloseMatch, duration)?.id;
     }
     if (id && !signal?.aborted) {
@@ -739,11 +747,19 @@ async function resolveCandidateDirectStream(
 
 const universalResolutionCache = new Map<string, { res: SmartStreamResolution; expiresAt: number }>();
 const inFlightResolutions = new Map<string, Promise<SmartStreamResolution>>();
+let activePlaybackResolveController: AbortController | null = null;
+let activePrebufferResolveController: AbortController | null = null;
+
+export function cancelPrebufferResolution(): void {
+  activePrebufferResolveController?.abort();
+  activePrebufferResolveController = null;
+}
 
 export async function resolveUniversalStream(
   track: StreamTrack,
   forceSource?: AudioSourceId,
-  excludedSources: string[] = []
+  excludedSources: string[] = [],
+  options?: { priority?: 'playback' | 'prebuffer'; signal?: AbortSignal }
 ): Promise<SmartStreamResolution> {
   if (track.source === 'local' || (track.path && !track.path.startsWith('http'))) {
     return {
@@ -753,6 +769,55 @@ export async function resolveUniversalStream(
       qualityLabel: 'Local Audio',
       lossless: Boolean(track.path?.toLowerCase().endsWith('.flac') || track.path?.toLowerCase().endsWith('.wav')),
       switched: false,
+    };
+  }
+
+  const priority = options?.priority;
+  let ownedController: AbortController | null = null;
+  if (priority === 'playback') {
+    activePrebufferResolveController?.abort();
+    activePrebufferResolveController = null;
+    activePlaybackResolveController?.abort();
+    ownedController = new AbortController();
+    activePlaybackResolveController = ownedController;
+  } else if (priority === 'prebuffer') {
+    if (activePlaybackResolveController && !activePlaybackResolveController.signal.aborted) {
+      return {
+        streamUrl: null,
+        actualSource: (track.source as AudioSourceId) || 'youtube',
+        originalSource: track.source,
+        qualityLabel: 'Cancelled',
+        lossless: false,
+        switched: false,
+        error: 'Prebuffer deferred to active playback',
+      };
+    }
+    activePrebufferResolveController?.abort();
+    ownedController = new AbortController();
+    activePrebufferResolveController = ownedController;
+  }
+
+  const externalSignal = ownedController && options?.signal
+    ? AbortSignal.any([ownedController.signal, options.signal])
+    : ownedController?.signal ?? options?.signal;
+
+  const releaseOwned = () => {
+    if (ownedController) {
+      if (activePlaybackResolveController === ownedController) activePlaybackResolveController = null;
+      if (activePrebufferResolveController === ownedController) activePrebufferResolveController = null;
+    }
+  };
+
+  if (externalSignal?.aborted) {
+    releaseOwned();
+    return {
+      streamUrl: null,
+      actualSource: (track.source as AudioSourceId) || 'youtube',
+      originalSource: track.source,
+      qualityLabel: 'Cancelled',
+      lossless: false,
+      switched: false,
+      error: 'Playback cancelled',
     };
   }
 
@@ -787,18 +852,26 @@ export async function resolveUniversalStream(
     track.album, track.duration, spotifyId, settings.tidalQuality, settings.deezerQuality]);
   if (!forceSource && excludedSources.length === 0) {
     const cached = universalResolutionCache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) return cached.res;
+    if (cached && cached.expiresAt > Date.now()) {
+      releaseOwned();
+      return cached.res;
+    }
   }
 
   const flightKey = JSON.stringify([cacheKey, forceSource, excludedSources.slice().sort()]);
-  const existingFlight = inFlightResolutions.get(flightKey);
-  if (existingFlight) return existingFlight;
+  const existingFlight = !externalSignal ? inFlightResolutions.get(flightKey) : undefined;
+  if (existingFlight) {
+    releaseOwned();
+    return existingFlight;
+  }
 
   const resolutionTask = (async (): Promise<SmartStreamResolution> => {
     type SourceResult = Awaited<ReturnType<typeof resolveBySourceId>>;
     const deadline = Date.now() + (forceSource ? 20000 : 24000);
     const attempt = async (source: AudioSourceId, signal: AbortSignal): Promise<SourceResult> => {
-      const budget = source === 'spotify' && !forceSource ? (spotifyId ? 9000 : 5000) : 15000;
+      if (signal.aborted) return null;
+      const spotifyBudget = spotifyId ? (isNativeSpotifyConnected() ? 4500 : 9000) : 3500;
+      const budget = source === 'spotify' && !forceSource ? spotifyBudget : 15000;
       const timeout = AbortSignal.timeout(Math.max(0, Math.min(budget, deadline - Date.now())));
       const scopedSignal = AbortSignal.any([signal, timeout]);
       const result = resolveBySourceId(source, routeTrack, settings, Boolean(forceSource), scopedSignal)
@@ -819,21 +892,30 @@ export async function resolveUniversalStream(
     };
 
     const fallback = new AbortController();
+    const onExternalAbort = () => fallback.abort();
+    if (externalSignal) {
+      if (externalSignal.aborted) fallback.abort();
+      else externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+    }
+
     let youtubeFallback: Promise<SourceResult> | undefined;
     let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
     if (chain[0] === 'spotify' && chain[1] === 'youtube') {
       // Start preparing an alternative to hide network latency on failure.
       // Its result is only consumed if the Spotify attempt fails.
-      fallbackTimer = setTimeout(() => { youtubeFallback = attempt('youtube', fallback.signal); }, 450);
+      fallbackTimer = setTimeout(() => {
+        if (!fallback.signal.aborted) youtubeFallback = attempt('youtube', fallback.signal);
+      }, 450);
     }
 
     try {
       for (const source of chain) {
-        if (Date.now() >= deadline) break;
+        if (Date.now() >= deadline || fallback.signal.aborted) break;
         if (source === 'youtube' && fallbackTimer) clearTimeout(fallbackTimer);
         const resolved = await (source === 'youtube' && youtubeFallback
           ? youtubeFallback
           : attempt(source, fallback.signal));
+        if (fallback.signal.aborted) break;
         if (!resolved?.url) continue;
 
         const actualSource = resolved.actualSource || source;
@@ -863,26 +945,35 @@ export async function resolveUniversalStream(
       }
     } finally {
       if (fallbackTimer) clearTimeout(fallbackTimer);
+      externalSignal?.removeEventListener('abort', onExternalAbort);
       fallback.abort();
+      releaseOwned();
     }
 
     return {
       streamUrl: null,
       actualSource: (track.source as AudioSourceId) || 'youtube',
       originalSource: track.source,
-      qualityLabel: 'Unavailable',
+      qualityLabel: externalSignal?.aborted ? 'Cancelled' : 'Unavailable',
       lossless: false,
       switched: false,
-      error: forceSource ? `Источник ${forceSource.toUpperCase()} не смог открыть трек.` : 'Не удалось открыть трек из доступных источников.',
+      error: externalSignal?.aborted
+        ? 'Запрос отменён'
+        : forceSource
+          ? `Источник ${forceSource.toUpperCase()} не смог открыть трек.`
+          : 'Не удалось открыть трек из доступных источников.',
     };
   })();
 
-  inFlightResolutions.set(flightKey, resolutionTask);
-  try {
-    return await resolutionTask;
-  } finally {
-    inFlightResolutions.delete(flightKey);
+  if (!externalSignal) {
+    inFlightResolutions.set(flightKey, resolutionTask);
+    try {
+      return await resolutionTask;
+    } finally {
+      inFlightResolutions.delete(flightKey);
+    }
   }
+  return resolutionTask;
 }
 
 export function setupProvidersIPC(): void {
@@ -946,9 +1037,10 @@ export function setupProvidersIPC(): void {
     async (
       _e,
       track: { id: string; title: string; artist: string; album?: string; duration?: number; source: string; path?: string; spotifyUri?: string },
-      forceSource?: AudioSourceId
+      forceSource?: AudioSourceId,
+      options?: { priority?: 'playback' | 'prebuffer' }
     ) => {
-      return resolveUniversalStream(track, forceSource);
+      return resolveUniversalStream(track, forceSource, [], options);
     }
   );
 

@@ -45,6 +45,10 @@ function start(): ChildProcess | null {
   proc.on('error',ended);proc.on('exit',ended);
   return proc;
 }
+export function isNativeSpotifyConnected(): boolean {
+  return connected;
+}
+
 export function spotifyTrackId(value?: string): string | undefined {
   return value?.trim().match(
     /^(?:spotify:(?:track:|\/\/(?:track\/)?)?|https:\/\/open\.spotify\.com\/(?:intl-[a-z-]+\/)?track\/)?([A-Za-z0-9]{22})(?:[?#][^\s]*)?$/,
@@ -56,6 +60,7 @@ function requestNative(
   credentials: SpotifyCredentials,
   options: { manual?: boolean; signal?: AbortSignal } = {},
 ): Promise<BridgeResponse | null> {
+  if (options.signal?.aborted) return Promise.resolve(null);
   const revision = bridgeRevision;
   const execute = async () => {
     if (revision !== bridgeRevision || options.signal?.aborted) return null;
@@ -64,12 +69,32 @@ function requestNative(
     if (!proc?.stdin) return null;
     const number = ++requestId;
     return new Promise<BridgeResponse | null>((resolve) => {
+      let settled = false;
+      const done = (value: BridgeResponse | null) => {
+        if (settled) return;
+        settled = true;
+        options.signal?.removeEventListener('abort', onAbort);
+        resolve(value);
+      };
+      const onAbort = () => {
+        const entry = pending.get(number);
+        if (entry) {
+          clearTimeout(entry.timer);
+          pending.delete(number);
+        }
+        done(null);
+      };
+      if (options.signal?.aborted) {
+        done(null);
+        return;
+      }
+      options.signal?.addEventListener('abort', onAbort, { once: true });
       const timer = setTimeout(() => {
         lastError = 'Spotify не ответил вовремя';
         cooldownUntil = Date.now() + 10000;
         shutdown();
       }, 12000);
-      pending.set(number, { resolve, timer });
+      pending.set(number, { resolve: done, timer });
       proc.stdin!.write(JSON.stringify({ ...payload, requestId: number, token: credentials.token, user: credentials.user || '' }) + '\n', (error) => {
         if (error && child === proc) shutdown();
       });
@@ -77,7 +102,34 @@ function requestNative(
   };
   const queued = nativeQueue.then(execute, execute);
   nativeQueue = queued.then(() => {}, () => {});
-  return queued;
+  if (!options.signal) return queued;
+  return new Promise<BridgeResponse | null>((resolve) => {
+    let settled = false;
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      resolve(null);
+    };
+    if (options.signal!.aborted) {
+      onAbort();
+      return;
+    }
+    options.signal!.addEventListener('abort', onAbort, { once: true });
+    queued.then(
+      (res) => {
+        if (settled) return;
+        settled = true;
+        options.signal!.removeEventListener('abort', onAbort);
+        resolve(res);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        options.signal!.removeEventListener('abort', onAbort);
+        resolve(null);
+      }
+    );
+  });
 }
 
 export async function resolveNativeSpotify(

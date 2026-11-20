@@ -1,7 +1,7 @@
 {
   "name": "archivetune-desktop",
-  "version": "16.2.0-beta.1",
-  "description": "ArchiveTune Desktop (V16 Beta) \u2014 Dual-Deck Smart DJ Automix, Universal Lossless Matrix, Word-by-Word Lyrics & Motion Canvas",
+  "version": "16.2.0",
+  "description": "ArchiveTune Desktop — Dual-Deck Smart DJ Automix, Universal Lossless Matrix, Word-by-Word Lyrics & Motion Canvas",
   "private": true,
   "author": {
     "name": "hari45wavin",
@@ -23,6 +23,7 @@
     "test": "node scripts/test-engine.mjs",
     "test:audio-dsp": "node --test scripts/test-audio-dsp.cjs",
     "test:source-routing": "node scripts/test-source-routing.cjs",
+    "test:races": "node scripts/test-playback-races.cjs",
     "build:audio-dsp": "node scripts/build-audio-dsp.cjs",
     "build:native-spotify": "python3 scripts/build-spotify-native.py"
   },
@@ -65,9 +66,10 @@
         "dir"
       ],
       "category": "Audio",
+      "artifactName": "${productName}-${version}-linux-${arch}.${ext}",
       "icon": "assets/icon.png",
       "synopsis": "YouTube Music & Local Files Player",
-      "description": "ArchiveTune for Linux \u2014 the cutest music player with YouTube Music streaming, local library, synced lyrics, crossfade, and Last.fm scrobbling."
+      "description": "ArchiveTune for Linux — the cutest music player with YouTube Music streaming, local library, synced lyrics, crossfade, and Last.fm scrobbling."
     },
     "win": {
       "target": [
@@ -75,6 +77,12 @@
         "portable"
       ],
       "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "artifactName": "${productName}-${version}-windows-${arch}-setup.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-windows-${arch}-portable.${ext}"
     },
     "directories": {
       "output": "release",

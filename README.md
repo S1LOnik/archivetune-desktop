@@ -1,4 +1,4 @@
-# ArchiveTune Desktop (V16 Beta)
+# ArchiveTune Desktop
 
 Desktop music player for Linux (Wayland/X11) and Windows inspired by [`S1LOnik/ArchiveTune`](https://github.com/S1LOnik/ArchiveTune) (V16) and built on an enhanced Electron + Dual-Deck `mpv` IPC architecture.
 
@@ -21,9 +21,23 @@ Desktop music player for Linux (Wayland/X11) and Windows inspired by [`S1LOnik/A
   - `Flamingo`, `V8 Immersive`, `V10 Expressive`, `BitChord`, `SimpMusic`, `SpatialFlow`, `TikTok Rail`, and `Classic` with `0.85x` cover spring compression on pause/scrubbing, dynamic artwork color extraction, and spring recoil buttons.
 - **Persistent Storage (`src/main/db.ts`) & Desktop Integration (`src/main/desktop.ts`)**:
   - Transactional state + SQLite (`archivetune.db`) mirror for settings, liked songs, playlists, history, and queue.
-  - System Tray, Close-to-Tray, Global Media Shortcuts, Always-on-Top Mini PiP widget, Discord Rich Presence (native IPC), and Last.fm Audioscrobbler 2.0.
+  - System Tray, Close-to-Tray, Global Media Shortcuts, Discord Rich Presence (native IPC), and Last.fm Audioscrobbler 2.0.
 
-## Quick Start
+## Install
+
+Download the x64 AppImage or tar.gz for Linux, or the x64 installer or
+portable executable for Windows, from [GitHub Releases](https://github.com/S1LOnik/archivetune-desktop/releases).
+
+- Install `mpv` and make it available on your `PATH` for playback.
+- Install Java 17 or newer for native Spotify playback.
+- Install `yt-dlp` for YouTube fallback, `ffmpeg` for audio analysis and exports,
+  and `sqlite3` for the library database mirror.
+- On Linux, make the AppImage executable before opening it. If FUSE is unavailable,
+  extract the tar.gz and run the `archivetune-desktop` executable from the extracted directory.
+
+## Build from source
+
+Use Node.js 24, Python 3, and JDK 17 or newer. Run `npm ci` before building.
 
 ```bash
 # Development mode (Vite HMR + Electron)

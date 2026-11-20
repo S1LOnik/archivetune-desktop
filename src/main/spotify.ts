@@ -572,7 +572,20 @@ async function fetchLibraryTracksGqlPage(limit = 50, offset = 0): Promise<{
   return { totalCount, tracks };
 }
 
-export async function spotifySearchCandidates(query: string, limit = 5): Promise<any[]> {
+const spotifySearchCache = new Map<string, { results: any[]; expiresAt: number }>();
+
+export async function spotifySearchCandidates(query: string, limit = 5, signal?: AbortSignal): Promise<any[]> {
+  if (!query.trim() || signal?.aborted) return [];
+  const cacheKey = `${query.trim().toLowerCase()}:${limit}`;
+  const cached = spotifySearchCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.results;
+
+  const storeCache = (results: any[]) => {
+    if (spotifySearchCache.size >= 150) spotifySearchCache.delete(spotifySearchCache.keys().next().value!);
+    spotifySearchCache.set(cacheKey, { results, expiresAt: Date.now() + 5 * 60 * 1000 });
+    return results;
+  };
+
   try {
     const gqlRes = await spotifyGqlPost('searchDesktop', {
       searchTerm: query,
@@ -585,6 +598,7 @@ export async function spotifySearchCandidates(query: string, limit = 5): Promise
       includeLocalConcertsField: false,
       includeAuthors: false,
     });
+    if (signal?.aborted) return [];
     const items: any[] = gqlRes?.data?.searchV2?.tracksV2?.items || [];
     const tracks: any[] = [];
     for (const it of items) {
@@ -605,10 +619,11 @@ export async function spotifySearchCandidates(query: string, limit = 5): Promise
         });
       }
     }
-    if (tracks.length > 0) return tracks;
+    if (tracks.length > 0) return storeCache(tracks);
   } catch {
     /* fallback to REST */
   }
+  if (signal?.aborted) return [];
   try {
     const params = new URLSearchParams({
       q: query,
@@ -616,8 +631,9 @@ export async function spotifySearchCandidates(query: string, limit = 5): Promise
       limit: String(limit),
     });
     const data = await spotifyApi(`/search?${params.toString()}`);
+    if (signal?.aborted) return [];
     const items = data?.tracks?.items ?? [];
-    return items.map((track: any) => ({
+    const mapped = items.map((track: any) => ({
       id: `spotify:${track.id}`,
       externalId: String(track.id),
       title: track.name,
@@ -630,6 +646,7 @@ export async function spotifySearchCandidates(query: string, limit = 5): Promise
       codec: 'Vorbis',
       lossless: false,
     }));
+    return storeCache(mapped);
   } catch {
     return [];
   }

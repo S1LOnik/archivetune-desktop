@@ -13,7 +13,8 @@ import type { Track, AudioSourceId } from '../types/electron';
 
 async function resolveTrackStreamUrl(
   track: Track,
-  forceSource?: AudioSourceId
+  forceSource?: AudioSourceId,
+  priority: 'playback' | 'prebuffer' = 'playback'
 ): Promise<{
   url: string;
   spotifyId?: string;
@@ -48,7 +49,8 @@ async function resolveTrackStreamUrl(
       path: track.path,
       spotifyUri: track.spotifyUri,
     },
-    forceSource
+    forceSource,
+    { priority }
   );
 
   if (uni.streamUrl) {
@@ -68,16 +70,45 @@ async function resolveTrackStreamUrl(
 }
 
 let prebufferGeneration = 0;
+let prebufferTimer: ReturnType<typeof setTimeout> | null = null;
 let playbackGeneration = 0;
 let pendingPlaybackTrackId: string | null = null;
 let playPauseChain = Promise.resolve();
 let playbackCommandRevision = 0;
-async function prebufferUpcomingTrackInQueue(): Promise<void> {
-  const generation = ++prebufferGeneration;
+let slowLoadingTimer: ReturnType<typeof setTimeout> | null = null;
+
+function cancelScheduledPrebuffer(): void {
+  ++prebufferGeneration;
+  if (prebufferTimer) {
+    clearTimeout(prebufferTimer);
+    prebufferTimer = null;
+  }
+}
+
+function clearSlowLoadingTimer(): void {
+  if (slowLoadingTimer) {
+    clearTimeout(slowLoadingTimer);
+    slowLoadingTimer = null;
+  }
+}
+
+function schedulePrebufferUpcomingTrack(delayMs = 1800): void {
+  cancelScheduledPrebuffer();
+  const scheduledGen = prebufferGeneration;
+  prebufferTimer = setTimeout(() => {
+    prebufferTimer = null;
+    if (scheduledGen !== prebufferGeneration) return;
+    void prebufferUpcomingTrackInQueue(scheduledGen);
+  }, delayMs);
+}
+
+async function prebufferUpcomingTrackInQueue(existingGen?: number): Promise<void> {
+  const generation = existingGen ?? ++prebufferGeneration;
   const api = window.electronAPI;
   if (!api) return;
 
-  const { queue, queueIndex, repeat, prebufferNextTrack, resolvedSourceId, isPlaying } = usePlayerStore.getState();
+  const { queue, queueIndex, repeat, prebufferNextTrack, resolvedSourceId, isPlaying, loading } = usePlayerStore.getState();
+  if (loading || !isPlaying) return;
   if (!prebufferNextTrack || repeat === 'one') {
     await api.player.prebufferNext(null);
     return;
@@ -107,7 +138,7 @@ async function prebufferUpcomingTrackInQueue(): Promise<void> {
   }
 
   try {
-    const resolved = await resolveTrackStreamUrl(nextTrack);
+    const resolved = await resolveTrackStreamUrl(nextTrack, undefined, 'prebuffer');
     if (generation !== prebufferGeneration) return;
     await api.player.prebufferNext({
       url: resolved.url,
@@ -143,6 +174,8 @@ export function usePlayer() {
     setPosition,
     setDuration,
     setLoading,
+    setLoadingStage,
+    setPlaybackError,
     setTrackStartTimeSec,
     setResolvedStreamMeta,
     nextTrack,
@@ -157,17 +190,27 @@ export function usePlayer() {
       const store = usePlayerStore.getState();
       const ui = useUIStore.getState();
 
-      // Prevent duplicate concurrent play of same track unless explicit forceSource switch
-      if (!forceSource && pendingPlaybackTrackId === track.id) return;
+      // Prevent duplicate concurrent play of same track unless explicit forceSource switch or retrying an error
+      if (!forceSource && !store.playbackError && pendingPlaybackTrackId === track.id) return;
 
       ++playbackCommandRevision;
       const generation = ++playbackGeneration;
       pendingPlaybackTrackId = track.id;
-      ++prebufferGeneration;
+      cancelScheduledPrebuffer();
+      clearSlowLoadingTimer();
+      setPlaybackError(null);
       setLoading(true);
+      setLoadingStage('resolving');
       setCurrentTrack(track);
       setIsPlaying(false);
       if (showFeedback) showPlaybackFeedback();
+
+      slowLoadingTimer = setTimeout(() => {
+        if (generation === playbackGeneration && usePlayerStore.getState().loading) {
+          setLoadingStage('slow');
+        }
+      }, 2200);
+
       const pausePrevious = api.player.pause().catch(() => {});
       void api.desktop?.updatePresence({ id: track.id, title: track.title, artist: track.artist, album: track.album, duration: track.duration, position: 0, isPlaying: false, thumbnail: track.thumbnail }).catch(() => {});
       // Use the saved cover before asking a CDN; apply artwork only to the current request.
@@ -176,15 +219,20 @@ export function usePlayer() {
         if (generation !== playbackGeneration) return;
         const thumbnail = saved?.track?.thumbnail || track.thumbnail;
         if (thumbnail && thumbnail !== track.thumbnail) {
-          usePlayerStore.setState(state => ({ currentTrack: state.currentTrack ? { ...state.currentTrack, thumbnail } : null }));
+          usePlayerStore.setState(state => ({
+            currentTrack: state.currentTrack && state.currentTrack.id === track.id
+              ? { ...state.currentTrack, thumbnail }
+              : state.currentTrack,
+          }));
         }
       })();
       setResolvedStreamMeta(forceSource ? `Подключаем ${forceSource.toUpperCase()}…` : 'Ищем аудиопоток…', null, false);
 
       try {
-        const resolved = await resolveTrackStreamUrl(track, forceSource);
+        const resolved = await resolveTrackStreamUrl(track, forceSource, 'playback');
         await pausePrevious;
         if (generation !== playbackGeneration) return;
+        setLoadingStage('buffering');
         setResolvedStreamMeta(resolved.badge, resolved.actualSource, resolved.lossless, resolved.spotifyId);
 
         if (ui.showSmartSwitchToasts && resolved.switched && resolved.switchedReason) {
@@ -196,6 +244,10 @@ export function usePlayer() {
           ui.pushToast(`Источник переключён: ${resolved.badge}`, resolved.lossless ? 'lossless' : 'switch');
         }
 
+        const latestThumbnail = usePlayerStore.getState().currentTrack?.id === track.id
+          ? usePlayerStore.getState().currentTrack?.thumbnail || track.thumbnail
+          : track.thumbnail;
+
         const res = await api.player.play(resolved.url, {
           id: track.id,
           title: track.title,
@@ -206,7 +258,7 @@ export function usePlayer() {
           originalSource: track.source,
           spotifyUri: track.spotifyUri,
           spotifyId: resolved.spotifyId,
-          thumbnail: track.thumbnail,
+          thumbnail: latestThumbnail,
           headers: resolved.headers,
           strictSource: Boolean(forceSource),
         });
@@ -216,6 +268,9 @@ export function usePlayer() {
           throw new Error(res.error || 'mpv failed to start stream');
         }
 
+        clearSlowLoadingTimer();
+        setLoadingStage('idle');
+        setPlaybackError(null);
         store.addToHistory(track);
         setIsPlaying(true);
         setTrackStartTimeSec(Date.now() / 1000);
@@ -230,7 +285,7 @@ export function usePlayer() {
           duration: track.duration,
           position: 0,
           isPlaying: true,
-          thumbnail: track.thumbnail,
+          thumbnail: latestThumbnail,
         };
         api.desktop?.updatePresence(presencePayload).catch(() => {});
         api.scrobble?.updateNowPlaying(track).catch(() => {});
@@ -245,22 +300,30 @@ export function usePlayer() {
           api.together?.syncHostState({ track, position: 0, isPlaying: true }).catch(() => {});
         }
 
-        void prebufferUpcomingTrackInQueue();
+        schedulePrebufferUpcomingTrack(1800);
       } catch (err: any) {
         if (generation !== playbackGeneration) return;
+        clearSlowLoadingTimer();
+        const message = err?.message || 'Поток недоступен';
         console.error('Playback error:', err);
-        useUIStore.getState().pushToast(`Ошибка воспроизведения: ${err?.message || 'Поток недоступен'}`, 'error');
+        useUIStore.getState().pushToast(`Ошибка воспроизведения: ${message}`, 'error');
+        setPlaybackError(message);
+        setLoadingStage('idle');
         setResolvedStreamMeta('Поток недоступен', null, false);
         setIsPlaying(false);
       } finally {
         if (generation === playbackGeneration) {
+          clearSlowLoadingTimer();
           pendingPlaybackTrackId = null;
           setLoading(false);
+          if (usePlayerStore.getState().loadingStage !== 'idle') setLoadingStage('idle');
         }
       }
     },
     [
       setLoading,
+      setLoadingStage,
+      setPlaybackError,
       setCurrentTrack,
       setResolvedStreamMeta,
       setIsPlaying,
@@ -268,6 +331,11 @@ export function usePlayer() {
       setDuration,
     ]
   );
+
+  const retryCurrentTrack = useCallback(async () => {
+    const track = usePlayerStore.getState().currentTrack;
+    if (track) await playTrack(track, undefined, true);
+  }, [playTrack]);
 
   const playFromQueue = useCallback(
     async (tracks: Track[], index = 0) => {
@@ -336,8 +404,10 @@ export function usePlayer() {
     const commandRevision = ++playbackCommandRevision;
     ++playbackGeneration;
     pendingPlaybackTrackId = null;
-    ++prebufferGeneration;
+    cancelScheduledPrebuffer();
+    clearSlowLoadingTimer();
     setLoading(false);
+    setLoadingStage('idle');
     setIsPlaying(false);
     playPauseChain = playPauseChain.then(async () => {
       if (commandRevision !== playbackCommandRevision) return;
@@ -361,7 +431,7 @@ export function usePlayer() {
       }
     }).catch(() => {});
     return playPauseChain;
-  }, [setIsPlaying, setLoading]);
+  }, [setIsPlaying, setLoading, setLoadingStage]);
 
   const resume = useCallback(() => {
     const commandRevision = ++playbackCommandRevision;
@@ -371,7 +441,7 @@ export function usePlayer() {
       const state = usePlayerStore.getState();
       const st = await window.electronAPI?.player.getStatus();
       if (commandRevision !== playbackCommandRevision) return;
-      if (state.currentTrack && (!st?.currentUrl || st.currentTrackId !== state.currentTrack.id)) {
+      if (state.currentTrack && (state.playbackError || !st?.currentUrl || st.currentTrackId !== state.currentTrack.id)) {
         void playTrack(state.currentTrack, undefined, false);
         return;
       }
@@ -397,9 +467,10 @@ export function usePlayer() {
 
   const seek = useCallback(
     async (seconds: number) => {
+      const trackId = usePlayerStore.getState().currentTrack?.id;
       setPosition(seconds);
       await window.electronAPI?.player.seek(seconds);
-      window.electronAPI?.desktop?.updatePosition(seconds, true);
+      window.electronAPI?.desktop?.updatePosition(seconds, true, trackId);
       if (useAccountsStore.getState().together.role === 'host') {
         window.electronAPI?.together?.syncHostState({ position: seconds });
       }
@@ -462,6 +533,7 @@ export function usePlayer() {
 
   return {
     playTrack,
+    retryCurrentTrack,
     playFromQueue,
     startRadio,
     pause,
@@ -506,19 +578,26 @@ export function usePlayerEvents() {
       const store = usePlayerStore.getState();
       if (store.currentTrack?.id !== info.trackId) return;
       store.setLoading(info.loading);
+      store.setLoadingStage(info.loading ? 'resolving' : 'idle');
       if (info.error) {
+        store.setPlaybackError(info.error);
         store.setResolvedStreamMeta('Поток недоступен', null, false);
         store.setIsPlaying(false);
         useUIStore.getState().pushToast(info.error, 'error');
       } else if (info.badge && info.source) {
+        store.setPlaybackError(null);
         store.setResolvedStreamMeta(info.badge, info.source as AudioSourceId, Boolean(info.lossless), info.spotifyId);
         store.setIsPlaying(true);
       }
     });
     const unsubProgress = api.player.onProgress((info) => {
       const store = usePlayerStore.getState();
+      if (store.loading) return;
       if (info.trackId && info.trackId !== store.currentTrack?.id) return;
-      if (Date.now() - lastSystemPositionTick >= 1000) { api.desktop?.updatePosition(info.position); lastSystemPositionTick = Date.now(); }
+      if (Date.now() - lastSystemPositionTick >= 1000) {
+        api.desktop?.updatePosition(info.position, false, store.currentTrack?.id);
+        lastSystemPositionTick = Date.now();
+      }
       const update: Partial<typeof store> = {};
       if (info.position !== store.position) update.position = info.position;
       if (info.duration > 0 && info.duration !== store.duration) update.duration = info.duration;
@@ -557,18 +636,22 @@ export function usePlayerEvents() {
       }
     });
 
-    const unsubEnded = api.player.onEnded(() => {
+    const unsubEnded = api.player.onEnded((info) => {
       const state = usePlayerStore.getState();
+      if (state.loading) return;
+      if (info?.trackId && state.currentTrack?.id && info.trackId !== state.currentTrack.id) return;
       if (state.repeat === 'one' && state.currentTrack) void playTrack(state.currentTrack);
       else void skipNext();
     });
 
-    const unsubAutomix = api.player.onAutomixTransition(({ nextTrackId, spotifyId }) => {
+    const unsubAutomix = api.player.onAutomixTransition(({ fromTrackId, nextTrackId, spotifyId }) => {
       const store = usePlayerStore.getState();
+      if (store.loading) return;
+      if (fromTrackId && store.currentTrack?.id && store.currentTrack.id !== fromTrackId) return;
       const idx = store.queue.findIndex((t) => t.id === nextTrackId);
       if (idx >= 0) {
         const nextT = store.queue[idx];
-        usePlayerStore.setState({ queueIndex: idx, currentTrack: nextT, position: 0, automixPlan: null,
+        usePlayerStore.setState({ queueIndex: idx, currentTrack: nextT, position: 0, duration: nextT.duration || 0, playbackError: null, automixPlan: null,
           resolvedSpotifyTrack: spotifyId ? { trackId: nextTrackId, spotifyId } : undefined });
         store.addToHistory(nextT);
         api.desktop?.updatePresence({
@@ -581,7 +664,7 @@ export function usePlayerEvents() {
           isPlaying: true,
           thumbnail: nextT.thumbnail,
         });
-        setTimeout(() => void prebufferUpcomingTrackInQueue(), 900);
+        schedulePrebufferUpcomingTrack(1800);
       }
     });
 
@@ -610,10 +693,6 @@ export function usePlayerEvents() {
       const state = usePlayerStore.getState();
       const target = typeof event.position === 'number' ? event.position : state.position + (event.offset || 0);
       void seek(Math.max(0, Math.min(state.duration || Infinity, target)));
-    });
-
-    const unsubMiniMode = api.onMiniModeChanged((isMini) => {
-      useUIStore.getState().setMiniPipMode(isMini);
     });
 
     const unsubTogetherState = api.together?.onState?.((st) => {
@@ -662,9 +741,6 @@ export function usePlayerEvents() {
       } else if (e.ctrlKey && e.key.toLowerCase() === 'q') {
         e.preventDefault();
         useUIStore.getState().toggleQueueDrawer();
-      } else if (e.ctrlKey && e.key.toLowerCase() === 'm') {
-        e.preventDefault();
-        api.toggleMiniMode?.();
       } else if (e.key === 'Escape') {
         const ui = useUIStore.getState();
         if (ui.contextMenu) ui.setContextMenu(null);
@@ -690,7 +766,6 @@ export function usePlayerEvents() {
       unsubRepeat();
       unsubMode();
       unsubSystemMode?.();
-      unsubMiniMode();
       unsubTogetherState?.();
       unsubTogetherSync?.();
       unsubPlaylists?.();

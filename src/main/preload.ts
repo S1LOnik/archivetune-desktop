@@ -11,8 +11,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   minimize: () => ipcRenderer.send('window:minimize'),
   maximize: () => ipcRenderer.send('window:maximize'),
   close: () => ipcRenderer.send('window:close'),
-  toggleMiniMode: () => ipcRenderer.invoke('window:toggleMiniMode'),
-  onMiniModeChanged: (cb: (isMini: boolean) => void) => subscribe<boolean>('window:miniModeChanged', cb),
   onMediaShortcut: (cb: (action: 'playPause' | 'play' | 'pause' | 'next' | 'prev') => void) =>
     subscribe<'playPause' | 'play' | 'pause' | 'next' | 'prev'>('shortcut:media', cb),
   updateDiscordPresence: (trackInfo: unknown) =>
@@ -23,7 +21,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     updatePlaybackMode: (mode: unknown) => ipcRenderer.send('desktop:updatePlaybackMode', mode),
     onPlaybackMode: (cb: (mode: unknown) => void) => subscribe('desktop:playbackMode', cb),
     updateLyrics: (trackId: string, lines: unknown[]) => ipcRenderer.send('desktop:updateLyrics', trackId, lines),
-    updatePosition: (position: number, seeked = false) => ipcRenderer.send('desktop:updatePosition', position, seeked),
+    updatePosition: (position: number, seeked = false, trackId?: string) => ipcRenderer.send('desktop:updatePosition', position, seeked, trackId),
     updatePresence: (trackInfo: unknown) => ipcRenderer.invoke('desktop:updatePresence', trackInfo),
     listenBrainzNowPlaying: (trackInfo: unknown) =>
       ipcRenderer.invoke('desktop:listenBrainzNowPlaying', trackInfo),
@@ -97,13 +95,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getStatus: () => ipcRenderer.invoke('player:getStatus'),
     onRecovery: (cb: (info: any) => void) => subscribe('player:recovery', cb),
     onProgress: (cb: (info: any) => void) => subscribe('player:progress', cb),
-    onEnded: (cb: () => void) => {
-      const listener = () => cb();
-      ipcRenderer.on('player:ended', listener);
-      return () => ipcRenderer.removeListener('player:ended', listener);
-    },
-    onAutomixTransition: (cb: (info: { nextTrackId: string; spotifyId?: string }) => void) =>
-      subscribe<{ nextTrackId: string }>('player:automixTransition', cb),
+    onEnded: (cb: (info?: { trackId?: string | null; revision?: number }) => void) =>
+      subscribe<{ trackId?: string | null; revision?: number } | undefined>('player:ended', cb),
+    onAutomixTransition: (cb: (info: { fromTrackId?: string; nextTrackId: string; spotifyId?: string; revision?: number }) => void) =>
+      subscribe<{ fromTrackId?: string; nextTrackId: string; spotifyId?: string; revision?: number }>('player:automixTransition', cb),
     onAutomixPlan: (cb: (plan: any) => void) => subscribe('player:automixPlan', cb),
     onSmartToast: (cb: (toast: { message: string; kind: string; timestamp: number }) => void) =>
       subscribe('player:smartToast', cb),
@@ -132,8 +127,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   providers: {
     searchMulti: (query: string, source?: string) =>
       ipcRenderer.invoke('providers:searchMulti', query, source),
-    resolveUniversal: (track: object, forceSource?: string) =>
-      ipcRenderer.invoke('providers:resolveUniversal', track, forceSource),
+    resolveUniversal: (track: object, forceSource?: string, options?: { priority?: 'playback' | 'prebuffer' }) =>
+      ipcRenderer.invoke('providers:resolveUniversal', track, forceSource, options),
     findAlternatives: (track: object) => ipcRenderer.invoke('providers:findAlternatives', track),
     checkLatencies: () => ipcRenderer.invoke('providers:checkLatencies'),
   },
