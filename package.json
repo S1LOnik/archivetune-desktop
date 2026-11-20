@@ -93,6 +93,7 @@
       "assets/**",
       "!assets/spotify-native/**"
     ],
+    "extraFiles": ["LICENSE"],
     "extraResources": [
       {
         "from": "assets/spotify-native",
