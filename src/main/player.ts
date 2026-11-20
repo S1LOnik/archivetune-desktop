@@ -499,18 +499,23 @@ class DualDeckMpvPlayer {
     const af = this.buildAudioFilterString(deck.bassCut);
     if (af) args.push(`--af=${af}`);
 
-    deck.proc = spawn('mpv', args, { stdio: 'ignore' });
-    deck.proc.on('exit', () => {
+    const proc = spawn('mpv', args, { stdio: 'ignore' });
+    deck.proc = proc;
+    const clearProcess = () => {
+      if (deck.proc !== proc) return;
       deck.proc = null;
-      if (deck.persistentSocket) {
-        deck.persistentSocket.destroy();
-        deck.persistentSocket = null;
-      }
+      deck.persistentSocket?.destroy();
+      deck.persistentSocket = null;
+    };
+    proc.once('exit', clearProcess);
+    proc.once('error', (err) => {
+      console.warn('[Player] Could not start mpv:', err.message);
+      clearProcess();
     });
 
     // Fast socket connection loop (retry every 10ms instead of 50ms polling + 80ms sleep)
     const startTime = Date.now();
-    while (Date.now() - startTime < 2000) {
+    while (deck.proc === proc && Date.now() - startTime < 2000) {
       if (process.platform === 'win32' || fs.existsSync(deck.ipcPath)) {
         const ok = await this.connectPersistentSocket(deck);
         if (ok) break;

@@ -98,3 +98,65 @@ jobs:
             release/*.exe
           if-no-files-found: error
           retention-days: 30
+
+  build-macos:
+    name: Build macOS (Apple Silicon)
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'npm'
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install Rust WASM target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build Application
+        run: npm run build
+
+      - name: Package macOS disk image
+        run: npx electron-builder --mac dmg --arm64 --publish never
+
+      - name: Test packaged application with local audio
+        shell: bash
+        run: |
+          brew install mpv
+          at_profile="$(mktemp -d)"
+          mkdir "$at_profile/mpv"
+          printf 'ao=null\n' > "$at_profile/mpv/mpv.conf"
+          MPV_HOME="$at_profile/mpv" release/mac-arm64/ArchiveTune.app/Contents/MacOS/ArchiveTune \
+            --user-data-dir="$at_profile/profile" --remote-debugging-port=9224 > "$at_profile/app.log" 2>&1 &
+          at_pid=$!
+          trap 'kill "$at_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..45}; do
+            if curl -fsS http://127.0.0.1:9224/json/list 2>/dev/null | grep -q 'renderer/index.html'; then
+              npm test -- --offline || { cat "$at_profile/app.log"; exit 1; }
+              exit 0
+            fi
+            kill -0 "$at_pid" 2>/dev/null || break
+            sleep 1
+          done
+          cat "$at_profile/app.log"
+          exit 1
+
+      - name: Upload macOS Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ArchiveTune-macOS-arm64
+          path: release/*.dmg
+          if-no-files-found: error
+          retention-days: 30

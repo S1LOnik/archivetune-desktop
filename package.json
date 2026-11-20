@@ -71,6 +71,15 @@
       "synopsis": "YouTube Music & Local Files Player",
       "description": "ArchiveTune for Linux — the cutest music player with YouTube Music streaming, local library, synced lyrics, crossfade, and Last.fm scrobbling."
     },
+    "mac": {
+      "target": ["dmg"],
+      "category": "public.app-category.music",
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
+      "icon": "assets/icon.png",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "notarize": false
+    },
     "win": {
       "target": [
         "nsis",

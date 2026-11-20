@@ -3,9 +3,10 @@ import { Minus, Square, X } from 'lucide-react';
 import { version } from '../../../package.json';
 
 export default function TitleBar() {
+  const isMac = window.electronAPI?.platform === 'darwin';
   return (
     <div
-      className="flex items-center justify-between h-9 px-4 bg-surface-container/70 backdrop-blur-xl flex-shrink-0 select-none z-50"
+      className={`flex items-center justify-between h-9 pr-4 bg-surface-container/70 backdrop-blur-xl flex-shrink-0 select-none z-50 ${isMac ? 'pl-24' : 'pl-4'}`}
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
       <div className="flex items-center gap-2.5">
@@ -18,7 +19,7 @@ export default function TitleBar() {
         </span>
       </div>
 
-      <div
+      {!isMac && <div
         className="flex items-center gap-1"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
@@ -43,7 +44,7 @@ export default function TitleBar() {
         >
           <X size={13} />
         </button>
-      </div>
+      </div>}
     </div>
   );
 }

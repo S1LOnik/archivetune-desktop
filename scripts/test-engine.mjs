@@ -129,8 +129,13 @@ async function runSuite() {
 
   let passed = 0;
   let failed = 0;
+  const offline = process.argv.includes('--offline');
 
-  async function test(name, fn) {
+  async function test(name, fn, requiresNetwork = false) {
+    if (offline && requiresNetwork) {
+      console.log(`• Test: ${name}... SKIPPED (offline)`);
+      return;
+    }
     process.stdout.write(`• Test: ${name}... `);
     const start = Date.now();
     try {
@@ -259,7 +264,7 @@ async function runSuite() {
     `);
     if (!res.ok) throw new Error(res.error);
     console.log(`    ↳ Resolved stream in ${res.elapsedMs}ms, dedup verified`);
-  });
+  }, true);
 
   // 5. Audio Engine Playback, Seek Buffering & Cache
   await test('Audio Playback & Scrubbing during buffer acquisition', async () => {
@@ -312,7 +317,7 @@ async function runSuite() {
     `);
     if (!res.ok) throw new Error(res.error);
     console.log(`    ↳ Verified position: ${res.position.toFixed(1)}s, backward seek time: ${res.seekBackMs}ms`);
-  });
+  }, true);
 
   await test('Rapid local skips keep progress attached to the newest track', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'archivetune-engine-'));

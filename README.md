@@ -1,6 +1,6 @@
 # ArchiveTune Desktop
 
-Desktop music player for Linux (Wayland/X11) and Windows inspired by [`S1LOnik/ArchiveTune`](https://github.com/S1LOnik/ArchiveTune) (V16) and built on an enhanced Electron + Dual-Deck `mpv` IPC architecture.
+Desktop music player for Linux (Wayland/X11), Windows and Apple Silicon (preview) inspired by [`S1LOnik/ArchiveTune`](https://github.com/S1LOnik/ArchiveTune) (V16) and built on an enhanced Electron + Dual-Deck `mpv` IPC architecture.
 
 ## Key Features Ported from `S1LOnik/ArchiveTune`
 
@@ -34,6 +34,12 @@ portable executable for Windows, from [GitHub Releases](https://github.com/S1LOn
   and `sqlite3` for the library database mirror.
 - On Linux, make the AppImage executable before opening it. If FUSE is unavailable,
   extract the tar.gz and run the `archivetune-desktop` executable from the extracted directory.
+
+## macOS preview
+
+Download the `ArchiveTune-macOS-arm64` artifact from a successful [GitHub Actions build](https://github.com/S1LOnik/archivetune-desktop/actions/workflows/build.yml) and open the DMG. This test build uses ad-hoc signing and has no Apple notarization. Gatekeeper may block it on first launch.
+
+Install the playback and conversion tools with `brew install mpv yt-dlp ffmpeg`. Install a Java 17+ runtime registered with macOS for native Spotify playback. The preview targets Apple Silicon and has no macOS Control Center integration.
 
 ## Build from source
 

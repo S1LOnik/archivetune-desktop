@@ -641,7 +641,7 @@ export default function SettingsPage() {
               Воспроизведение и звук
             </h2>
             <p className="text-xs text-on-surface-variant">
-              Устройство вывода ALSA/Pulse/PipeWire, кроссфейд, питч, бас-буст и экспандер громкости
+              Устройство вывода, кроссфейд, изменение высоты тона и усиление баса
             </p>
           </div>
         </div>
@@ -656,7 +656,7 @@ export default function SettingsPage() {
             onChange={(e) => void handleAudioDeviceChange(e.target.value)}
             className="w-full bg-surface-container-high rounded-xl px-3.5 py-2.5 text-xs font-semibold text-on-surface outline-none"
           >
-            <option value="auto">По умолчанию (Auto PipeWire / PulseAudio)</option>
+            <option value="auto">Системное устройство по умолчанию</option>
             {audioDevices.map((dev) => (
               <option key={dev.id} value={dev.id}>
                 {dev.description || dev.id}

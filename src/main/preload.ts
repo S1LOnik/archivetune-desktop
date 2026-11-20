@@ -7,6 +7,8 @@ function subscribe<T = unknown>(channel: string, cb: (payload: T) => void): () =
 }
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  platform: process.platform,
+
   // Window controls & Desktop Integration
   minimize: () => ipcRenderer.send('window:minimize'),
   maximize: () => ipcRenderer.send('window:maximize'),

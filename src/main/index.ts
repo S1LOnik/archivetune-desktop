@@ -18,6 +18,13 @@ import { setupTogetherIPC, togetherManager } from './together';
 import { setupPlaylistsIoIPC } from './playlists_io';
 
 // Enable smooth Wayland/X11 GPU rendering on Linux (with user fallback setting)
+const isMac = process.platform === 'darwin';
+if (isMac) {
+  // Finder launches the app without the paths configured by the user's shell.
+  const executablePaths = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  process.env.PATH = [...new Set([...executablePaths, '/opt/homebrew/bin', '/usr/local/bin'])].join(path.delimiter);
+}
+
 const initialSettings = getDb().settings;
 app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
 if (process.platform === 'linux') {
@@ -65,8 +72,8 @@ function createWindow(): void {
     minWidth: 900,
     minHeight: 600,
     show: true,
-    frame: false,
-    titleBarStyle: 'hidden',
+    frame: isMac,
+    titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
     backgroundColor: '#141218',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -89,7 +96,7 @@ function createWindow(): void {
   setTimeout(showWindow, 150);
 
   mainWindow.on('close', (e) => {
-    if (!isQuitting && getDb().settings.closeToTray) {
+    if (!isQuitting && (isMac || getDb().settings.closeToTray)) {
       e.preventDefault();
       mainWindow?.hide();
     }
@@ -157,7 +164,7 @@ app.whenReady().then(() => {
     }
   });
   ipcMain.on('window:close', () => {
-    if (getDb().settings.closeToTray) {
+    if (isMac || getDb().settings.closeToTray) {
       mainWindow?.hide();
     } else {
       isQuitting = true;
@@ -190,7 +197,7 @@ app.whenReady().then(() => {
   });
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) mainWindow.show();
   });
 });
 
