@@ -37,7 +37,7 @@ portable executable for Windows, from [GitHub Releases](https://github.com/S1LOn
 
 ## macOS preview
 
-Download the `ArchiveTune-macOS-arm64` artifact from a successful [GitHub Actions build](https://github.com/S1LOnik/archivetune-desktop/actions/workflows/build.yml) and open the DMG. This test build uses ad-hoc signing and has no Apple notarization. Gatekeeper may block it on first launch.
+Download the `ArchiveTune-macOS-arm64` artifact from a successful [GitHub Actions build](https://github.com/S1LOnik/archivetune-desktop/actions/workflows/build.yml) and open the DMG. This test build has no Developer ID signature or Apple notarization. Gatekeeper may block it on first launch.
 
 Install the playback and conversion tools with `brew install mpv yt-dlp ffmpeg`. Install a Java 17+ runtime registered with macOS for native Spotify playback. The preview targets Apple Silicon and has no macOS Control Center integration.
 
