@@ -3,6 +3,7 @@ use std::{cell::RefCell, f64::consts::PI};
 struct Fft {
     real: Vec<f32>,
     imaginary: Vec<f32>,
+    hann: Vec<f32>,
     reverse: Vec<usize>,
     twiddles: Vec<(f64, f64)>,
 }
@@ -20,9 +21,16 @@ impl Fft {
                 (cosine, sine)
             })
             .collect();
+        let hann = (0..size)
+            .map(|index| {
+                let angle = 2.0 * PI * index as f64 / (size - 1) as f64;
+                (0.5 * (1.0 - angle.cos())) as f32
+            })
+            .collect();
         Self {
             real: vec![0.0; size],
             imaginary: vec![0.0; size],
+            hann,
             reverse,
             twiddles,
         }
@@ -92,6 +100,15 @@ pub extern "C" fn imaginary() -> *const f32 {
         slot.borrow()
             .as_ref()
             .map_or(std::ptr::null(), |fft| fft.imaginary.as_ptr())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn hann_window() -> *const f32 {
+    FFT.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .map_or(std::ptr::null(), |fft| fft.hann.as_ptr())
     })
 }
 

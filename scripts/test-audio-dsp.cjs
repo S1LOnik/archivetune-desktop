@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const { existsSync } = require('node:fs');
-const { copyFile, mkdtemp, rm } = require('node:fs/promises');
+const { copyFile, mkdtemp, readFile, rm } = require('node:fs/promises');
 const { tmpdir } = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
@@ -38,6 +38,29 @@ test('the worker transfers PCM and handles overlapping analysis jobs', async () 
   assert.equal(silentReport.cutoffHz, 0);
 });
 
+test('Rust exposes the Hann coefficients for each prepared FFT size', {
+  skip: !existsSync(nativeBinary),
+}, async () => {
+  const { instance } = await WebAssembly.instantiate(await readFile(nativeBinary));
+  const { memory, prepare, hann_window: hannWindow } = instance.exports;
+  assert.equal(hannWindow(), 0);
+
+  for (const size of [512, 4096, 1024, 512]) {
+    assert.notEqual(prepare(size), 0);
+    const pointer = hannWindow();
+    assert.notEqual(pointer, 0);
+    const window = new Float32Array(memory.buffer, pointer, size);
+    assert.equal(window[0], 0);
+    assert.equal(window[size - 1], 0);
+    for (let index = 0; index < size; index++) {
+      const expected = Math.fround(0.5 * (1 - Math.cos((2 * Math.PI * index) / (size - 1))));
+      assert.ok(Math.abs(window[index] - expected) <= 1e-7, `FFT size ${size}, coefficient ${index}`);
+    }
+    prepare(size);
+    assert.equal(hannWindow(), pointer);
+  }
+});
+
 test('Rust and TypeScript agree across FFT sizes and frequency bands', {
   skip: !existsSync(nativeBinary),
 }, async () => {
@@ -48,7 +71,7 @@ test('Rust and TypeScript agree across FFT sizes and frequency bands', {
     await copyFile(path.join(dist, 'audioDsp.js'), fallbackPath);
     const fallback = require(fallbackPath);
     const native = require('../dist/main/audioDsp');
-    for (const [sampleRate, fftSize] of [[22050, 1024], [11025, 512]]) {
+    for (const [sampleRate, fftSize] of [[22050, 1024], [11025, 256], [11025, 512]]) {
       const pcm = signal(sampleRate, 6, 300);
       assert.deepEqual(native.analyzeAutoMixFeatures(pcm, sampleRate, fftSize),
         fallback.analyzeAutoMixFeatures(pcm, sampleRate, fftSize));

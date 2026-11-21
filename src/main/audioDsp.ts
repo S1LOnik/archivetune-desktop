@@ -8,10 +8,17 @@ type FftExports = {
   memory: WebAssembly.Memory;
   prepare(size: number): number;
   imaginary(): number;
+  hann_window?(): number;
   transform(): void;
 };
 
 let wasm: FftExports | null | undefined;
+
+function createHannWindow(size: number): Float32Array {
+  const hann = new Float32Array(size);
+  for (let i = 0; i < size; i++) hann[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (size - 1)));
+  return hann;
+}
 
 function createFft(size: number) {
   if (wasm === undefined) {
@@ -23,12 +30,16 @@ function createFft(size: number) {
     }
   }
 
-  if (wasm) {
-    const realPointer = wasm.prepare(size);
+  const realPointer = wasm?.prepare(size);
+  if (wasm && realPointer) {
     const imaginaryPointer = wasm.imaginary();
+    const hannPointer = wasm.hann_window?.();
     return {
       re: new Float32Array(wasm.memory.buffer, realPointer, size),
       im: new Float32Array(wasm.memory.buffer, imaginaryPointer, size),
+      hann: hannPointer
+        ? new Float32Array(wasm.memory.buffer, hannPointer, size)
+        : createHannWindow(size),
       transform: wasm.transform,
     };
   }
@@ -38,6 +49,7 @@ function createFft(size: number) {
   return {
     re,
     im,
+    hann: createHannWindow(size),
     transform() {
       im.fill(0);
       fftRadix2(re, im);
@@ -90,11 +102,9 @@ export type AutoMixFeatures = Omit<AutoMixAnalysis, 'trackId' | 'durationMs' | '
 export function analyzeAutoMixFeatures(samples: Float32Array, analysisRate: number, fftSize: number): AutoMixFeatures {
   const hop = fftSize / 2;
   const numBins = fftSize / 2;
-  const hann = new Float32Array(fftSize);
-  for (let i = 0; i < fftSize; i++) hann[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (fftSize - 1)));
 
   const prevMag = new Float32Array(numBins);
-  const { re, im, transform } = createFft(fftSize);
+  const { re, im, hann, transform } = createFft(fftSize);
   const flux: number[] = [];
   const energyCurve: number[] = [];
   const vocalCurve: number[] = [];
@@ -209,12 +219,9 @@ export function runAcousticAuditFft(samples: Float32Array, sampleRate: number): 
   };
   if (numFrames <= 0) return emptyReport;
 
-  const hann = new Float32Array(FFT_SIZE);
-  for (let i = 0; i < FFT_SIZE; i++) hann[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (FFT_SIZE - 1)));
-
   const sumMag = new Float64Array(numBins);
   const sumEnergy = new Float64Array(numBins);
-  const { re, im, transform } = createFft(FFT_SIZE);
+  const { re, im, hann, transform } = createFft(FFT_SIZE);
 
   for (let f = 0; f < numFrames; f++) {
     const offset = f * step;
