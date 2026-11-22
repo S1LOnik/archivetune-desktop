@@ -17,7 +17,7 @@
 //!   (e.g., `sample_rate <= 30000`), JS reads past `sumEnergy` (`undefined` -> `NaN`) and takes the
 //!   `ratio = 0` branch; Rust mirrors `ratio = 0.0` directly without out-of-bounds indexing.
 
-const FFT_SIZE: usize = 4096;
+pub(super) const FFT_SIZE: usize = 4096;
 const STEP: usize = FFT_SIZE / 2;
 const NUM_BINS: usize = FFT_SIZE / 2;
 

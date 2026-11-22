@@ -303,9 +303,10 @@ export function runAcousticAuditFft(samples: Float32Array, sampleRate: number): 
 export function runAcousticAuditFftFallback(samples: Float32Array, sampleRate: number): AcousticAuditReport {
   const FFT_SIZE = 4096;
   const step = FFT_SIZE / 2;
-  const numFrames = Math.floor((samples.length - FFT_SIZE) / step);
+  const numFrames = samples.length >= FFT_SIZE ? Math.floor((samples.length - FFT_SIZE) / step) : 0;
   const numBins = FFT_SIZE / 2;
-  const nyquistHz = sampleRate / 2;
+  const safeSampleRate = Number.isFinite(sampleRate) && sampleRate > 0 ? sampleRate : 0;
+  const nyquistHz = safeSampleRate / 2;
   const binHz = nyquistHz / numBins;
 
   const emptyReport: AcousticAuditReport = {
@@ -313,11 +314,16 @@ export function runAcousticAuditFftFallback(samples: Float32Array, sampleRate: n
     cutoffHz: 0,
     rollOffHz: 0,
     nyquistHz,
-    sampleRate,
+    sampleRate: safeSampleRate,
     highBandEnergyRatio: 0,
     isTrueLossless: false,
   };
-  if (numFrames <= 0) return emptyReport;
+  if (safeSampleRate <= 0 || !Number.isFinite(binHz) || binHz <= 0 || numFrames <= 0) {
+    return emptyReport;
+  }
+  for (let i = 0; i < samples.length; i++) {
+    if (!Number.isFinite(samples[i])) return emptyReport;
+  }
 
   const sumMag = new Float64Array(numBins);
   const sumEnergy = new Float64Array(numBins);
@@ -354,6 +360,7 @@ export function runAcousticAuditFftFallback(samples: Float32Array, sampleRate: n
 
   let totalEnergy = 0;
   for (let b = 0; b < numBins; b++) totalEnergy += sumEnergy[b];
+  if (!Number.isFinite(totalEnergy)) return emptyReport;
   let accum = 0;
   let rollOffBin = 0;
   for (let b = 0; b < numBins; b++) {
@@ -371,11 +378,16 @@ export function runAcousticAuditFftFallback(samples: Float32Array, sampleRate: n
   const k22k = Math.min(numBins - 1, Math.floor(22050 / binHz));
 
   let midE = 0;
-  for (let b = k1k; b <= k15k; b++) midE += sumEnergy[b];
+  if (k1k >= 0 && k15k < numBins) {
+    for (let b = k1k; b <= k15k; b++) midE += sumEnergy[b];
+  }
   let highE = 0;
-  for (let b = k20_5k; b <= k22k; b++) highE += sumEnergy[b];
+  if (midE > 0 && k20_5k >= 0 && k20_5k <= k22k) {
+    for (let b = k20_5k; b <= k22k; b++) highE += sumEnergy[b];
+  }
 
-  const ratio = midE > 0 ? highE / midE : 0;
+  const rawRatio = midE > 0 ? highE / midE : 0;
+  const ratio = Number.isFinite(rawRatio) ? rawRatio : 0;
   let verdict: AcousticAuditReport['verdict'] = 'UPSCALED_LOSSY';
   if (cutoffHz >= 20200 || (rollOffHz >= 19500 && ratio > 1e-6)) {
     verdict = 'TRUE_LOSSLESS';
