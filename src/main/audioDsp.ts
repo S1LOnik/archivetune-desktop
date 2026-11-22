@@ -10,17 +10,13 @@ type FftExports = {
   imaginary(): number;
   hann_window?(): number;
   transform(): void;
+  prepare_acoustic_samples?(length: number): number;
+  audit_acoustic?(sampleRate: number): number;
 };
 
 let wasm: FftExports | null | undefined;
 
-function createHannWindow(size: number): Float32Array {
-  const hann = new Float32Array(size);
-  for (let i = 0; i < size; i++) hann[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (size - 1)));
-  return hann;
-}
-
-function createFft(size: number) {
+function loadWasm(): FftExports | null {
   if (wasm === undefined) {
     try {
       const binary = readFileSync(path.join(__dirname, 'audio-dsp.wasm'));
@@ -29,18 +25,28 @@ function createFft(size: number) {
       wasm = null;
     }
   }
+  return wasm;
+}
 
-  const realPointer = wasm?.prepare(size);
-  if (wasm && realPointer) {
-    const imaginaryPointer = wasm.imaginary();
-    const hannPointer = wasm.hann_window?.();
+function createHannWindow(size: number): Float32Array {
+  const hann = new Float32Array(size);
+  for (let i = 0; i < size; i++) hann[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (size - 1)));
+  return hann;
+}
+
+function createFft(size: number) {
+  const instance = loadWasm();
+  const realPointer = instance?.prepare(size);
+  if (instance && realPointer) {
+    const imaginaryPointer = instance.imaginary();
+    const hannPointer = instance.hann_window?.();
     return {
-      re: new Float32Array(wasm.memory.buffer, realPointer, size),
-      im: new Float32Array(wasm.memory.buffer, imaginaryPointer, size),
+      re: new Float32Array(instance.memory.buffer, realPointer, size),
+      im: new Float32Array(instance.memory.buffer, imaginaryPointer, size),
       hann: hannPointer
-        ? new Float32Array(wasm.memory.buffer, hannPointer, size)
+        ? new Float32Array(instance.memory.buffer, hannPointer, size)
         : createHannWindow(size),
-      transform: wasm.transform,
+      transform: instance.transform,
     };
   }
 
@@ -200,7 +206,101 @@ export function analyzeAutoMixFeatures(samples: Float32Array, analysisRate: numb
   return { bpm, beatConfidence, beatIntervalMs, firstDownbeatMs, onsetMs, energyCurve, vocalCurve };
 }
 
+const MAX_ACOUSTIC_SAMPLES = 4_194_304;
+
+const VERDICT_MAP: readonly AcousticAuditReport['verdict'][] = [
+  'SUSPECTED_FAKE', // 0
+  'UPSCALED_LOSSY', // 1
+  'TRUE_LOSSLESS',  // 2
+];
+
+function tryAuditAcousticWasm(
+  exports: FftExports,
+  samples: Float32Array,
+  sampleRate: number,
+): AcousticAuditReport | null {
+  const prepareAcoustic =
+    exports.prepare_acoustic_samples ??
+    (exports as Record<string, unknown>).prepareAcousticSamples;
+  const auditAcoustic =
+    exports.audit_acoustic ??
+    (exports as Record<string, unknown>).auditAcoustic;
+
+  if (
+    typeof prepareAcoustic !== 'function' ||
+    typeof auditAcoustic !== 'function'
+  ) {
+    return null;
+  }
+
+  if (samples.length > MAX_ACOUSTIC_SAMPLES || !Number.isFinite(sampleRate) || sampleRate <= 0) {
+    return null;
+  }
+
+  const samplePointer = prepareAcoustic.call(exports, samples.length) as number;
+  if (!samplePointer) {
+    return null;
+  }
+
+  if (samples.length > 0) {
+    new Float32Array(exports.memory.buffer, samplePointer, samples.length).set(samples);
+  }
+
+  const resultPointer = auditAcoustic.call(exports, sampleRate) as number;
+  if (!resultPointer) {
+    return null;
+  }
+
+  const result = new Float64Array(exports.memory.buffer, resultPointer, 5);
+  const cutoffHz = result[0];
+  const rollOffHz = result[1];
+  const nyquistHz = result[2];
+  const highBandEnergyRatio = result[3];
+  const verdictId = result[4];
+
+  if (
+    !Number.isFinite(cutoffHz) ||
+    !Number.isFinite(rollOffHz) ||
+    !Number.isFinite(nyquistHz) ||
+    !Number.isFinite(highBandEnergyRatio) ||
+    !Number.isFinite(verdictId)
+  ) {
+    return null;
+  }
+
+  const verdict = VERDICT_MAP[verdictId];
+  if (!verdict) {
+    return null;
+  }
+
+  return {
+    verdict,
+    cutoffHz,
+    rollOffHz,
+    nyquistHz,
+    sampleRate,
+    highBandEnergyRatio,
+    isTrueLossless: verdict === 'TRUE_LOSSLESS',
+  };
+}
+
 export function runAcousticAuditFft(samples: Float32Array, sampleRate: number): AcousticAuditReport {
+  const instance = loadWasm();
+  if (instance) {
+    try {
+      const wasmReport = tryAuditAcousticWasm(instance, samples, sampleRate);
+      if (wasmReport) {
+        return wasmReport;
+      }
+    } catch {
+      // Conservative fallback on any WASM execution or memory error
+    }
+  }
+
+  return runAcousticAuditFftFallback(samples, sampleRate);
+}
+
+export function runAcousticAuditFftFallback(samples: Float32Array, sampleRate: number): AcousticAuditReport {
   const FFT_SIZE = 4096;
   const step = FFT_SIZE / 2;
   const numFrames = Math.floor((samples.length - FFT_SIZE) / step);
